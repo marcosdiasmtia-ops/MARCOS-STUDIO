@@ -1,0 +1,13 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "functions": {
+    "api/generate.js": { "maxDuration": 60 },
+    "api/content.js": { "maxDuration": 60 },
+    "api/image.js": { "maxDuration": 120 },
+    "api/video.js": { "maxDuration": 300 },
+    "api/upload.js": { "maxDuration": 30 },
+    "api/search.js": { "maxDuration": 15 }
+  }
+}
