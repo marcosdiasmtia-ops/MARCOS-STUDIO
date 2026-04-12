@@ -45,15 +45,48 @@ export async function uploadToFal(base64, mimeType, fileName) {
   return data.url;
 }
 
+// Poll fal.ai for result
+async function pollForResult(requestId, endpoint, maxWait = 120000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    await new Promise(r => setTimeout(r, 3000));
+    
+    const res = await fetch(`/api/video-status?requestId=${requestId}&endpoint=${encodeURIComponent(endpoint)}`);
+    const data = await res.json();
+    
+    if (data.status === 'COMPLETED') return data.result;
+    if (data.status === 'FAILED') throw new Error('Generation failed');
+    // IN_QUEUE or IN_PROGRESS — keep polling
+  }
+  throw new Error('Timeout — generation took too long');
+}
+
 export async function generateImage(prompt, imageUrls) {
+  // Step 1: Submit to queue
   const res = await fetch('/api/image', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt, image_urls: imageUrls, aspect_ratio: '9:16' })
   });
   const data = await res.json();
-  if (data.error) throw new Error(data.error);
-  return data.images?.[0]?.url || null;
+  
+  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+
+  // If completed immediately
+  if (data.status === 'COMPLETED' && data.result?.images?.[0]) {
+    return data.result.images[0].url;
+  }
+
+  // If queued — poll for result
+  if (data.status === 'IN_QUEUE' && data.requestId) {
+    const result = await pollForResult(data.requestId, data.endpoint);
+    return result?.images?.[0]?.url || null;
+  }
+
+  // Fallback — check if images are directly in response
+  if (data.images?.[0]?.url) return data.images[0].url;
+
+  throw new Error('Unexpected response from image API');
 }
 
 export async function generateVideo(params) {
@@ -64,7 +97,7 @@ export async function generateVideo(params) {
   });
   const data = await res.json();
   if (data.error) throw new Error(data.error);
-  return data; // { requestId, endpoint } or { video }
+  return data;
 }
 
 export async function checkVideoStatus(requestId, endpoint) {
@@ -94,7 +127,7 @@ const LIGIA_PROFILE = {
   name: 'Lígia',
   isLigia: true,
   bodyDescription: 'Curvy natural Brazilian body, defined waist, full rounded hips, smooth flat belly, medium feminine shoulders, natural voluminous figure, NOT athletic NOT muscular NOT slim NOT model NOT thin',
-  photo: null, // Ligia uses the v8.2 identity
+  photo: null,
   createdAt: '2024-01-01'
 };
 
@@ -102,7 +135,6 @@ export function getProfiles() {
   try {
     const stored = localStorage.getItem(PROFILES_KEY);
     const profiles = stored ? JSON.parse(stored) : [];
-    // Always include Ligia first
     if (!profiles.find(p => p.id === 'ligia')) {
       profiles.unshift(LIGIA_PROFILE);
     }
@@ -125,7 +157,7 @@ export function saveProfile(profile) {
 }
 
 export function deleteProfile(id) {
-  if (id === 'ligia') return getProfiles(); // Can't delete Ligia
+  if (id === 'ligia') return getProfiles();
   const profiles = getProfiles().filter(p => p.id !== id);
   localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
   return profiles;
