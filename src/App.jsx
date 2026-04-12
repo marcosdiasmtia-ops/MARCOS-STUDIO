@@ -1,4 +1,4 @@
- import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { getSystemPrompt, VIDEO_NUMBERS_RULES } from './systemPrompt';
 import { callClaude, generateContent, searchTrends, generateImage, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles } from './api';
 import ProfileManager from './ProfileManager';
@@ -73,6 +73,7 @@ export default function App() {
   const [showProfiles, setShowProfiles] = useState(false);
   const [influencer, setInfluencer] = useState(getProfiles()[0]); // Default: Ligia
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(null); // null | 'frontal' | 'costas' | 'video'
   const [loadingMsg, setLoadingMsg] = useState('');
   const [error, setError] = useState(null);
 
@@ -164,7 +165,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
   // ── Step 2: Generate Image via fal.ai ──
   const handleGenerateImage = async (type) => {
-    setLoading(true); setError(null);
+    setLoadingStep(type); setError(null);
     setLoadingMsg(`Gerando imagem ${type}...`);
     try {
       const prompt = type === 'frontal' ? prompts.promptImagemFrontal?.positivo : prompts.promptImagemCostas?.positivo;
@@ -172,19 +173,27 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
       // Upload reference images to fal.ai
       const urls = [];
-      if (influencer.photo) {
-        // For custom influencer, upload their photo
-        const b64 = influencer.photo.split(',')[1];
-        const url = await uploadToFal(b64, 'image/png', 'influencer.png');
-        urls.push(url);
-      }
-      if (form.fotoProduto) {
-        const url = await uploadToFal(form.fotoProduto.base64, form.fotoProduto.mimeType, 'produto.png');
-        urls.push(url);
-      }
-      if (type === 'costas' && form.fotoCostas) {
-        const url = await uploadToFal(form.fotoCostas.base64, form.fotoCostas.mimeType, 'costas.png');
-        urls.push(url);
+
+      if (type === 'frontal') {
+        // FRONTAL: influencer photo (if custom) + product front photo
+        if (influencer.photo) {
+          const b64 = influencer.photo.split(',')[1];
+          const url = await uploadToFal(b64, 'image/png', 'influencer.png');
+          urls.push(url);
+        }
+        if (form.fotoProduto) {
+          const url = await uploadToFal(form.fotoProduto.base64, form.fotoProduto.mimeType, 'produto.png');
+          urls.push(url);
+        }
+      } else {
+        // COSTAS: generated frontal image + product back photo
+        if (generatedImages.frontal) {
+          urls.push(generatedImages.frontal); // Already a URL, no upload needed
+        }
+        if (form.fotoCostas) {
+          const url = await uploadToFal(form.fotoCostas.base64, form.fotoCostas.mimeType, 'costas.png');
+          urls.push(url);
+        }
       }
 
       const imageUrl = await generateImage(prompt, urls.length > 0 ? urls : undefined);
@@ -193,13 +202,13 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       console.error('Image generation error:', err);
       setError(err.message);
     } finally {
-      setLoading(false);
+      setLoadingStep(null);
     }
   };
 
   // ── Step 3: Generate Video via fal.ai ──
   const handleGenerateVideo = async (clipIndex = 0) => {
-    setLoading(true); setError(null);
+    setLoading(true); setLoadingStep('video'); setError(null);
     setLoadingMsg('Enviando para geração de vídeo...');
     try {
       const videoPrompts = prompts.promptsVideo || [prompts.promptVideo];
@@ -242,7 +251,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       console.error('Video generation error:', err);
       setError(err.message);
     } finally {
-      setLoading(false);
+      setLoading(false); setLoadingStep(null);
     }
   };
 
@@ -258,7 +267,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
     setVideoNum(prev => prev + 1);
     setPrompts(null); setContent(null);
     setGeneratedImages({ frontal:null, costas:null });
-    setGeneratedVideo(null);
+    setGeneratedVideo(null); setLoadingStep(null);
     setSelections({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
     setPage('form');
   };
@@ -266,7 +275,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   const newProduct = () => {
     setForm({ nome:'', preco:'', descricao:'', tipoVideo:'', engine:'kling', momento:'', estacao:'', estetica:'', auto:true, promptViral:'', transcricaoViral:'', fotoProduto:null, fotoProdutoUrl:null, fotoCostas:null, fotoCostasUrl:null });
     setPrompts(null); setContent(null); setHistory([]); setVideoNum(1);
-    setGeneratedImages({ frontal:null, costas:null }); setGeneratedVideo(null);
+    setGeneratedImages({ frontal:null, costas:null }); setGeneratedVideo(null); setLoadingStep(null);
     setSelections({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
     setPage('form');
   };
@@ -438,17 +447,18 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
             <CodeBlock label="PROMPT FRONTAL" content={r.promptImagemFrontal?.positivo}/>
             <CodeBlock label="NEGATIVE" content={r.promptImagemFrontal?.negativo}/>
             <div className="gen-row">
-              <button className="gen-btn" onClick={()=>handleGenerateImage('frontal')} disabled={loading}>
-                {loading ? '⏳ Gerando...' : '🎨 Gerar Imagem Frontal (fal.ai)'}
+              <button className="gen-btn" onClick={()=>handleGenerateImage('frontal')} disabled={loadingStep !== null}>
+                {loadingStep === 'frontal' ? '⏳ Gerando imagem frontal...' : '🎨 Gerar Imagem Frontal (fal.ai)'}
               </button>
               {generatedImages.frontal && <div className="gen-preview"><img src={generatedImages.frontal} alt="frontal"/></div>}
             </div>
             <hr className="divider"/>
             <CodeBlock label="PROMPT COSTAS" content={r.promptImagemCostas?.positivo}/>
             <div className="gen-row">
-              <button className="gen-btn" onClick={()=>handleGenerateImage('costas')} disabled={loading}>
-                {loading ? '⏳ Gerando...' : '🎨 Gerar Imagem Costas (fal.ai)'}
+              <button className="gen-btn" onClick={()=>handleGenerateImage('costas')} disabled={loadingStep !== null || !generatedImages.frontal}>
+                {loadingStep === 'costas' ? '⏳ Gerando imagem costas...' : '🎨 Gerar Imagem Costas (fal.ai)'}
               </button>
+              {!generatedImages.frontal && <p className="hint">Gere a imagem frontal primeiro.</p>}
               {generatedImages.costas && <div className="gen-preview"><img src={generatedImages.costas} alt="costas"/></div>}
             </div>
           </Accordion>
@@ -463,8 +473,8 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
             ))}
             {generatedImages.frontal && (
               <div className="gen-row">
-                <button className="gen-btn video" onClick={()=>handleGenerateVideo()} disabled={loading}>
-                  {loading ? '⏳ Gerando vídeo...' : `🎬 Gerar Vídeo (${form.engine})`}
+                <button className="gen-btn video" onClick={()=>handleGenerateVideo()} disabled={loadingStep !== null}>
+                  {loadingStep === 'video' ? '⏳ Gerando vídeo...' : `🎬 Gerar Vídeo (${form.engine})`}
                 </button>
                 {generatedVideo && <div className="gen-preview"><video src={generatedVideo} controls style={{width:'100%',borderRadius:8}}/></div>}
               </div>
@@ -501,4 +511,4 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   }
 
   return null;
-}       
+}
