@@ -58,23 +58,31 @@ export default async function handler(req, res) {
     const requestId = submitData.request_id;
     if (!requestId) return res.status(500).json({ error: 'No request_id', data: submitData });
 
+    // Use URLs from submit response (correct paths without subpath)
+    const statusUrl = submitData.status_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}/status`;
+    const responseUrl = submitData.response_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}`;
+
     console.log(`[image] Queued: ${requestId}`);
+    console.log(`[image] Status URL: ${statusUrl}`);
 
     // Poll for result
-    const statusBase = `https://queue.fal.run/${endpoint}/requests/${requestId}`;
     let attempts = 0;
     const maxAttempts = 60; // 2 minutes max
     while (attempts < maxAttempts) {
       await new Promise(r => setTimeout(r, 2000));
       attempts++;
 
-      const statusRes = await fetch(`${statusBase}/status`, {
+      const statusRes = await fetch(statusUrl, {
         headers: { 'Authorization': `Key ${FAL_KEY}` }
       });
+      if (!statusRes.ok) {
+        console.error(`[image] Status check error ${statusRes.status}`);
+        continue;
+      }
       const status = await statusRes.json();
 
       if (status.status === 'COMPLETED') {
-        const resultRes = await fetch(statusBase, {
+        const resultRes = await fetch(responseUrl, {
           headers: { 'Authorization': `Key ${FAL_KEY}` }
         });
         const result = await resultRes.json();
