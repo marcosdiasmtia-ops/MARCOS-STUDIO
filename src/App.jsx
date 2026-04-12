@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+ import { useState, useEffect } from 'react';
 import { getSystemPrompt, VIDEO_NUMBERS_RULES } from './systemPrompt';
 import { callClaude, generateContent, searchTrends, generateImage, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles } from './api';
 import ProfileManager from './ProfileManager';
@@ -164,7 +164,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
   // ── Step 2: Generate Image via fal.ai ──
   const handleGenerateImage = async (type) => {
-    setLoading(true);
+    setLoading(true); setError(null);
     setLoadingMsg(`Gerando imagem ${type}...`);
     try {
       const prompt = type === 'frontal' ? prompts.promptImagemFrontal?.positivo : prompts.promptImagemCostas?.positivo;
@@ -190,6 +190,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       const imageUrl = await generateImage(prompt, urls.length > 0 ? urls : undefined);
       setGeneratedImages(prev => ({ ...prev, [type]: imageUrl }));
     } catch(err) {
+      console.error('Image generation error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -198,7 +199,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
   // ── Step 3: Generate Video via fal.ai ──
   const handleGenerateVideo = async (clipIndex = 0) => {
-    setLoading(true);
+    setLoading(true); setError(null);
     setLoadingMsg('Enviando para geração de vídeo...');
     try {
       const videoPrompts = prompts.promptsVideo || [prompts.promptVideo];
@@ -238,6 +239,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
         }
       }
     } catch(err) {
+      console.error('Video generation error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -410,6 +412,12 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
             <button className="back-btn" onClick={newProduct}>← Novo</button>
           </div>
 
+          {/* Error display */}
+          {error && <div className="error-box" style={{margin:'16px 0'}}>
+            <p>⚠️ {error}</p>
+            <button className="retry-btn" onClick={()=>setError(null)}>✕ Fechar</button>
+          </div>}
+
           {/* Camadas */}
           {r.camadas && <div className="pills-row">
             {Object.entries(r.camadas).filter(([k])=>k!=='justificativa').map(([k,v])=><span key={k} className="pill"><span className="pk">{k}:</span> {v}</span>)}
@@ -493,4 +501,4 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   }
 
   return null;
-}
+}       
