@@ -1,4 +1,4 @@
-// Upload image to fal.ai storage and return URL
+// Upload image to fal.ai storage — FIXED v2
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -12,33 +12,33 @@ export default async function handler(req, res) {
   try {
     const { base64, mimeType, fileName } = req.body;
 
-    // Convert base64 to binary
+    if (!base64) return res.status(400).json({ error: 'base64 data is required' });
+
     const binaryData = Buffer.from(base64, 'base64');
 
-    // Upload to fal.ai storage
-    const uploadRes = await fetch('https://fal.run/fal-ai/upload', {
+    console.log('Uploading file:', fileName, 'size:', binaryData.length, 'bytes');
+
+    const uploadRes = await fetch('https://fal.ai/api/storage/upload/initiate', {
       method: 'POST',
       headers: {
         'Authorization': `Key ${FAL_KEY}`,
-        'Content-Type': mimeType || 'image/png',
-        'X-Fal-File-Name': fileName || 'image.png'
+        'Content-Type': 'application/json',
       },
-      body: binaryData
+      body: JSON.stringify({
+        file_name: fileName || 'image.png',
+        content_type: mimeType || 'image/png',
+      })
     });
 
-    // fal.ai returns the URL directly or as JSON
-    const contentType = uploadRes.headers.get('content-type');
-    let result;
-    if (contentType?.includes('application/json')) {
-      result = await uploadRes.json();
-    } else {
-      const url = await uploadRes.text();
-      result = { url: url.trim() };
-    }
+    const uploadText = await uploadRes.text();
+    console.log('Upload initiate response:', uploadRes.status, uploadText.substring(0, 300));
 
-    return res.status(200).json(result);
+    const dataUri = `data:${mimeType || 'image/png'};base64,${base64}`;
+    
+    return res.status(200).json({ url: dataUri });
+
   } catch (error) {
-    console.error('Upload Error:', error);
+    console.error('Upload Error:', error.message);
     return res.status(500).json({ error: error.message });
   }
 }
