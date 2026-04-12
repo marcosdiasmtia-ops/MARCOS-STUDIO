@@ -1,95 +1,148 @@
-  // fal.ai Nano Banana image generation proxy
-// Routes to /edit (with reference images) or text-to-image (without)
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+// API helper functions for all backend calls
 
-  const FAL_KEY = process.env.FAL_KEY;
-  if (!FAL_KEY) return res.status(500).json({ error: 'FAL_KEY not configured' });
+export async function callClaude(system, userMessage) {
+  const res = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system, messages: [{ role: 'user', content: userMessage }], max_tokens: 4096 })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  const text = data.content?.map(i => i.text || '').join('') || '';
+  return JSON.parse(text.replace(/```json|```/g, '').trim());
+}
 
+export async function generateContent(params) {
+  const res = await fetch('/api/content', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  const text = data.content?.map(i => i.text || '').join('') || '';
+  return JSON.parse(text.replace(/```json|```/g, '').trim());
+}
+
+export async function searchTrends(categoria, tipoProduto) {
+  const res = await fetch('/api/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ categoria, tipo_produto: tipoProduto })
+  });
+  const data = await res.json();
+  return data.trends || '';
+}
+
+export async function uploadToFal(base64, mimeType, fileName) {
+  const res = await fetch('/api/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base64, mimeType, fileName })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data.url;
+}
+
+export async function generateImage(prompt, imageUrls) {
+  const res = await fetch('/api/image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, image_urls: imageUrls, aspect_ratio: '9:16' })
+  });
+  // Handle non-JSON error responses (Vercel returns HTML on crashes)
+  const text = await res.text();
+  let data;
   try {
-    const { prompt, image_urls, aspect_ratio = '9:16' } = req.body;
-
-    if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
-
-    // Choose endpoint: /edit requires image_urls, text-to-image does not
-    const hasImages = Array.isArray(image_urls) && image_urls.length > 0;
-    const endpoint = hasImages ? 'fal-ai/nano-banana/edit' : 'fal-ai/nano-banana';
-
-    console.log(`[image] Using endpoint: ${endpoint}, hasImages: ${hasImages}`);
-
-    // Build request body
-    const body = {
-      prompt,
-      aspect_ratio,
-      output_format: 'png',
-      num_images: 1
-    };
-    if (hasImages) {
-      body.image_urls = image_urls;
-    }
-
-    // Submit to queue
-    const submitRes = await fetch(`https://queue.fal.run/${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Key ${FAL_KEY}`
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!submitRes.ok) {
-      const errText = await submitRes.text();
-      console.error(`[image] fal.ai submit error ${submitRes.status}:`, errText);
-      return res.status(submitRes.status).json({ error: `fal.ai error: ${submitRes.status}`, details: errText });
-    }
-
-    const submitData = await submitRes.json();
-
-    if (submitData.images) {
-      // Sync mode - result immediately
-      return res.status(200).json(submitData);
-    }
-
-    const requestId = submitData.request_id;
-    if (!requestId) return res.status(500).json({ error: 'No request_id', data: submitData });
-
-    console.log(`[image] Queued: ${requestId}`);
-
-    // Poll for result
-    const statusBase = `https://queue.fal.run/${endpoint}/requests/${requestId}`;
-    let attempts = 0;
-    const maxAttempts = 60; // 2 minutes max
-    while (attempts < maxAttempts) {
-      await new Promise(r => setTimeout(r, 2000));
-      attempts++;
-
-      const statusRes = await fetch(`${statusBase}/status`, {
-        headers: { 'Authorization': `Key ${FAL_KEY}` }
-      });
-      const status = await statusRes.json();
-
-      if (status.status === 'COMPLETED') {
-        const resultRes = await fetch(statusBase, {
-          headers: { 'Authorization': `Key ${FAL_KEY}` }
-        });
-        const result = await resultRes.json();
-        return res.status(200).json(result);
-      }
-
-      if (status.status === 'FAILED') {
-        console.error(`[image] Generation failed:`, status);
-        return res.status(500).json({ error: 'Image generation failed', details: status });
-      }
-    }
-
-    return res.status(408).json({ error: 'Timeout waiting for image', requestId });
-  } catch (error) {
-    console.error('Image API Error:', error);
-    return res.status(500).json({ error: error.message });
+    data = JSON.parse(text);
+  } catch {
+    console.error('Server response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Servidor retornou erro ${res.status}. Verifique os logs no Vercel → Deployments → Function Logs`);
   }
-}  
+  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  if (!res.ok) throw new Error(`Erro ${res.status}: ${JSON.stringify(data)}`);
+  return data.images?.[0]?.url || null;
+}
+
+export async function generateVideo(params) {
+  const res = await fetch('/api/video', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('Video API response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Servidor retornou erro ${res.status}. Verifique os logs no Vercel.`);
+  }
+  if (data.error) throw new Error(data.error);
+  return data; // { requestId, endpoint } or { video }
+}
+
+export async function checkVideoStatus(requestId, endpoint) {
+  const res = await fetch(`/api/video-status?requestId=${requestId}&endpoint=${encodeURIComponent(endpoint)}`);
+  const data = await res.json();
+  return data;
+}
+
+// File to base64
+export function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      resolve({ base64, mimeType: file.type, preview: reader.result });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Profile storage
+const PROFILES_KEY = 'ligia-ugc-profiles';
+
+const LIGIA_PROFILE = {
+  id: 'ligia',
+  name: 'Lígia',
+  isLigia: true,
+  bodyDescription: 'Curvy natural Brazilian body, defined waist, full rounded hips, smooth flat belly, medium feminine shoulders, natural voluminous figure, NOT athletic NOT muscular NOT slim NOT model NOT thin',
+  photo: null, // Ligia uses the v8.2 identity
+  createdAt: '2024-01-01'
+};
+
+export function getProfiles() {
+  try {
+    const stored = localStorage.getItem(PROFILES_KEY);
+    const profiles = stored ? JSON.parse(stored) : [];
+    // Always include Ligia first
+    if (!profiles.find(p => p.id === 'ligia')) {
+      profiles.unshift(LIGIA_PROFILE);
+    }
+    return profiles;
+  } catch {
+    return [LIGIA_PROFILE];
+  }
+}
+
+export function saveProfile(profile) {
+  const profiles = getProfiles();
+  const idx = profiles.findIndex(p => p.id === profile.id);
+  if (idx >= 0) {
+    profiles[idx] = profile;
+  } else {
+    profiles.push({ ...profile, id: Date.now().toString(), createdAt: new Date().toISOString() });
+  }
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+  return profiles;
+}
+
+export function deleteProfile(id) {
+  if (id === 'ligia') return getProfiles(); // Can't delete Ligia
+  const profiles = getProfiles().filter(p => p.id !== id);
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+  return profiles;
+}
