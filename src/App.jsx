@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getSystemPrompt, VIDEO_NUMBERS_RULES } from './systemPrompt';
-import { callClaude, generateContent, searchTrends, generateImage, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles } from './api';
+import { callClaude, generateContent, searchTrends, generateImage, generateBackPrompt, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles } from './api';
 import ProfileManager from './ProfileManager';
 import './styles.css';
 
@@ -93,6 +93,7 @@ export default function App() {
   const [selections, setSelections] = useState({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
   const [generatedImages, setGeneratedImages] = useState({ frontal:null, costas:null });
   const [generatedVideo, setGeneratedVideo] = useState(null);
+  const [backPromptReady, setBackPromptReady] = useState(false); // true after back prompt regenerated from frontal image
 
   // Video tracking
   const [videoNum, setVideoNum] = useState(1);
@@ -206,6 +207,34 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
     }
   };
 
+  // ── Step 2b: Generate Back Prompt from frontal image via Claude ──
+  const handleGenerateBackPrompt = async () => {
+    setLoadingStep('backprompt'); setError(null);
+    setLoadingMsg('Claude analisando imagem frontal para criar prompt de costas...');
+    try {
+      if (!generatedImages.frontal) throw new Error('Gere a imagem frontal primeiro');
+
+      const backPrompt = await generateBackPrompt({
+        frontalImageUrl: generatedImages.frontal,
+        frontalPrompt: prompts.promptImagemFrontal?.positivo,
+        visual: prompts.visual,
+        camadas: prompts.camadas,
+      });
+
+      // Update prompts with new back prompt
+      setPrompts(prev => ({
+        ...prev,
+        promptImagemCostas: backPrompt
+      }));
+      setBackPromptReady(true);
+    } catch(err) {
+      console.error('Back prompt generation error:', err);
+      setError(err.message);
+    } finally {
+      setLoadingStep(null);
+    }
+  };
+
   // ── Step 3: Generate Video via fal.ai ──
   const handleGenerateVideo = async (clipIndex = 0) => {
     setLoading(true); setLoadingStep('video'); setError(null);
@@ -267,7 +296,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
     setVideoNum(prev => prev + 1);
     setPrompts(null); setContent(null);
     setGeneratedImages({ frontal:null, costas:null });
-    setGeneratedVideo(null); setLoadingStep(null);
+    setGeneratedVideo(null); setLoadingStep(null); setBackPromptReady(false);
     setSelections({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
     setPage('form');
   };
@@ -275,7 +304,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   const newProduct = () => {
     setForm({ nome:'', preco:'', descricao:'', tipoVideo:'', engine:'kling', momento:'', estacao:'', estetica:'', auto:true, promptViral:'', transcricaoViral:'', fotoProduto:null, fotoProdutoUrl:null, fotoCostas:null, fotoCostasUrl:null });
     setPrompts(null); setContent(null); setHistory([]); setVideoNum(1);
-    setGeneratedImages({ frontal:null, costas:null }); setGeneratedVideo(null); setLoadingStep(null);
+    setGeneratedImages({ frontal:null, costas:null }); setGeneratedVideo(null); setLoadingStep(null); setBackPromptReady(false);
     setSelections({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
     setPage('form');
   };
@@ -452,15 +481,38 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
               </button>
               {generatedImages.frontal && <div className="gen-preview"><img src={generatedImages.frontal} alt="frontal"/></div>}
             </div>
-            <hr className="divider"/>
-            <CodeBlock label="PROMPT COSTAS" content={r.promptImagemCostas?.positivo}/>
-            <div className="gen-row">
-              <button className="gen-btn" onClick={()=>handleGenerateImage('costas')} disabled={loadingStep !== null || !generatedImages.frontal}>
-                {loadingStep === 'costas' ? '⏳ Gerando imagem costas...' : '🎨 Gerar Imagem Costas (fal.ai)'}
-              </button>
-              {!generatedImages.frontal && <p className="hint">Gere a imagem frontal primeiro.</p>}
-              {generatedImages.costas && <div className="gen-preview"><img src={generatedImages.costas} alt="costas"/></div>}
-            </div>
+
+            {/* ── COSTAS: Step-by-step flow ── */}
+            {generatedImages.frontal && <>
+              <hr className="divider"/>
+
+              {/* Step 2b: Generate back prompt from frontal image */}
+              {!backPromptReady && (
+                <div className="gen-row">
+                  <button className="gen-btn" onClick={handleGenerateBackPrompt} disabled={loadingStep !== null} style={{background:'linear-gradient(135deg,#6366f1,#8b5cf6)'}}>
+                    {loadingStep === 'backprompt' ? '⏳ Claude analisando imagem frontal...' : '🤖 Gerar Prompt Costas (baseado na imagem frontal)'}
+                  </button>
+                  <p className="hint">O Claude vai analisar a imagem frontal gerada pra criar o prompt de costas com total consistência.</p>
+                </div>
+              )}
+
+              {/* Step 2c: Show back prompt + generate back image */}
+              {backPromptReady && <>
+                <CodeBlock label="PROMPT COSTAS (baseado na imagem frontal)" content={r.promptImagemCostas?.positivo}/>
+                {r.promptImagemCostas?.negativo && <CodeBlock label="NEGATIVE COSTAS" content={r.promptImagemCostas?.negativo}/>}
+                <div className="gen-row">
+                  <button className="gen-btn" onClick={()=>handleGenerateImage('costas')} disabled={loadingStep !== null}>
+                    {loadingStep === 'costas' ? '⏳ Gerando imagem costas...' : '🎨 Gerar Imagem Costas (fal.ai)'}
+                  </button>
+                  {generatedImages.costas && <div className="gen-preview"><img src={generatedImages.costas} alt="costas"/></div>}
+                </div>
+              </>}
+            </>}
+
+            {!generatedImages.frontal && <>
+              <hr className="divider"/>
+              <p className="hint">Gere a imagem frontal primeiro para habilitar a etapa de costas.</p>
+            </>}
           </Accordion>
 
           {/* Video Prompts + Generation */}
