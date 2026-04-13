@@ -4,11 +4,11 @@
   "framework": "vite",
   "functions": {
     "api/generate.js": { "maxDuration": 60 },
+    "api/generate-back.js": { "maxDuration": 60 },
     "api/content.js": { "maxDuration": 60 },
-    "api/image.js": { "maxDuration": 15 },
-    "api/video.js": { "maxDuration": 15 },
-    "api/video-status.js": { "maxDuration": 10 },
+    "api/image.js": { "maxDuration": 120 },
+    "api/video.js": { "maxDuration": 300 },
     "api/upload.js": { "maxDuration": 30 },
-    "api/search.js": { "maxDuration": 60 }
+    "api/search.js": { "maxDuration": 15 }
   }
 }
