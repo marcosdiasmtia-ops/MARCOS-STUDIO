@@ -65,6 +65,24 @@ export async function generateImage(prompt, imageUrls) {
   return data.images?.[0]?.url || null;
 }
 
+export async function generateBackPrompt({ frontalImageUrl, frontalPrompt, visual, camadas }) {
+  const res = await fetch('/api/generate-back', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frontalImageUrl, frontalPrompt, visual, camadas })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('Back prompt response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar prompt de costas. Verifique os logs no Vercel.`);
+  }
+  if (data.error) throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  return data; // { positivo, negativo }
+}
+
 export async function generateVideo(params) {
   const res = await fetch('/api/video', {
     method: 'POST',
