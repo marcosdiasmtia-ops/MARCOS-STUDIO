@@ -1,52 +1,43 @@
+// Poll video generation status using fal.ai provided URLs
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const FAL_KEY = process.env.FAL_KEY;
   if (!FAL_KEY) return res.status(500).json({ error: 'FAL_KEY not configured' });
 
-  const requestId = req.query.requestId || req.body?.requestId;
-  const endpoint = req.query.endpoint || req.body?.endpoint;
+  const { requestId, endpoint, statusUrl, responseUrl } = req.query;
+  if (!requestId) return res.status(400).json({ error: 'requestId required' });
 
-  if (!requestId || !endpoint) {
-    return res.status(400).json({ error: 'requestId and endpoint required', query: req.query });
-  }
+  // Use provided URLs (correct) or construct fallback
+  const finalStatusUrl = statusUrl || `https://queue.fal.run/${endpoint}/requests/${requestId}/status`;
+  const finalResponseUrl = responseUrl || `https://queue.fal.run/${endpoint}/requests/${requestId}`;
 
   try {
-    const statusRes = await fetch(
-      `https://queue.fal.run/${endpoint}/requests/${requestId}/status`,
-      { headers: { 'Authorization': `Key ${FAL_KEY}` } }
-    );
-    const statusText = await statusRes.text();
-    if (!statusRes.ok) return res.status(200).json({ status: 'IN_PROGRESS' });
+    const statusRes = await fetch(finalStatusUrl, {
+      headers: { 'Authorization': `Key ${FAL_KEY}` }
+    });
 
-    let status;
-    try { status = JSON.parse(statusText); } catch {
-      return res.status(200).json({ status: 'IN_PROGRESS' });
+    if (!statusRes.ok) {
+      console.error(`[video-status] Status check error ${statusRes.status}`);
+      return res.status(200).json({ status: 'IN_QUEUE', error: `Status check returned ${statusRes.status}` });
     }
+
+    const status = await statusRes.json();
 
     if (status.status === 'COMPLETED') {
-      const resultRes = await fetch(
-        `https://queue.fal.run/${endpoint}/requests/${requestId}`,
-        { headers: { 'Authorization': `Key ${FAL_KEY}` } }
-      );
-      const resultText = await resultRes.text();
-      try {
-        const result = JSON.parse(resultText);
-        return res.status(200).json({ status: 'COMPLETED', result });
-      } catch {
-        return res.status(200).json({ status: 'IN_PROGRESS' });
-      }
+      const resultRes = await fetch(finalResponseUrl, {
+        headers: { 'Authorization': `Key ${FAL_KEY}` }
+      });
+      const result = await resultRes.json();
+      return res.status(200).json({ status: 'COMPLETED', result });
     }
 
-    if (status.status === 'FAILED') {
-      return res.status(200).json({ status: 'FAILED', error: 'Generation failed' });
-    }
-
-    return res.status(200).json({ status: status.status || 'IN_PROGRESS' });
+    return res.status(200).json({ status: status.status || 'IN_QUEUE', logs: status.logs || [] });
   } catch (error) {
-    return res.status(200).json({ status: 'IN_PROGRESS', error: error.message });
+    console.error('[video-status] Error:', error);
+    return res.status(200).json({ status: 'IN_QUEUE', error: error.message });
   }
 }
