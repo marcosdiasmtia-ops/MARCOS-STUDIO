@@ -60,6 +60,8 @@ export default async function handler(req, res) {
       if (aspect_ratio) input.aspect_ratio = aspect_ratio;
     }
 
+    console.log(`[video] Submitting to ${endpoint}`);
+
     // Submit to queue
     const submitRes = await fetch(`https://queue.fal.run/${endpoint}`, {
       method: 'POST',
@@ -70,6 +72,12 @@ export default async function handler(req, res) {
       body: JSON.stringify(input)
     });
 
+    if (!submitRes.ok) {
+      const errText = await submitRes.text();
+      console.error(`[video] Submit error ${submitRes.status}:`, errText);
+      return res.status(submitRes.status).json({ error: `fal.ai error: ${submitRes.status}`, details: errText });
+    }
+
     const submitData = await submitRes.json();
     const requestId = submitData.request_id;
 
@@ -79,17 +87,17 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'No request_id', data: submitData });
     }
 
-    // Return request_id for client-side polling
+    console.log(`[video] Queued: ${requestId}`);
+
+    // Return request_id + URLs from fal.ai response for client-side polling
     return res.status(202).json({
       requestId,
       endpoint,
-      statusUrl: `/api/video?check=${requestId}&endpoint=${encodeURIComponent(endpoint)}`
+      statusUrl: submitData.status_url || `https://queue.fal.run/${endpoint}/requests/${requestId}/status`,
+      responseUrl: submitData.response_url || `https://queue.fal.run/${endpoint}/requests/${requestId}`,
     });
   } catch (error) {
     console.error('Video API Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
-
-// Also handle GET for status polling
-export const config = { api: { bodyParser: true } };
