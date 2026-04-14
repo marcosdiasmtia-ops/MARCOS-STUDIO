@@ -261,20 +261,24 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
         setGeneratedVideo(result.video.url);
       } else if (result.requestId) {
         setLoadingMsg('Vídeo em processamento...');
-        // Poll for result
+        // Poll for result using URLs from fal.ai
         let done = false;
-        while (!done) {
+        let attempts = 0;
+        const maxAttempts = 120; // 10 minutes max (5s interval)
+        while (!done && attempts < maxAttempts) {
           await new Promise(r => setTimeout(r, 5000));
-          const status = await checkVideoStatus(result.requestId, result.endpoint);
+          attempts++;
+          const status = await checkVideoStatus(result.requestId, result.endpoint, result.statusUrl, result.responseUrl);
           if (status.status === 'COMPLETED') {
             setGeneratedVideo(status.result?.video?.url);
             done = true;
           } else if (status.status === 'FAILED') {
             throw new Error('Geração de vídeo falhou');
           } else {
-            setLoadingMsg(`Vídeo: ${status.status}...`);
+            setLoadingMsg(`Vídeo: ${status.status || 'processando'}... (${attempts * 5}s)`);
           }
         }
+        if (!done) throw new Error('Timeout: vídeo não completou em 10 minutos. Tente novamente.');
       }
     } catch(err) {
       console.error('Video generation error:', err);
