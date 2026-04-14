@@ -101,8 +101,12 @@ export async function generateVideo(params) {
   return data; // { requestId, endpoint } or { video }
 }
 
-export async function checkVideoStatus(requestId, endpoint) {
-  const res = await fetch(`/api/video-status?requestId=${requestId}&endpoint=${encodeURIComponent(endpoint)}`);
+export async function checkVideoStatus(requestId, endpoint, statusUrl, responseUrl) {
+  const params = new URLSearchParams({ requestId });
+  if (endpoint) params.set('endpoint', endpoint);
+  if (statusUrl) params.set('statusUrl', statusUrl);
+  if (responseUrl) params.set('responseUrl', responseUrl);
+  const res = await fetch(`/api/video-status?${params.toString()}`);
   const data = await res.json();
   return data;
 }
