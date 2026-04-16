@@ -115,7 +115,7 @@ export default function App() {
     try {
       const system = getSystemPrompt(influencer);
       const prevCtx = history.length > 0
-        ? `\nVÍDEOS ANTERIORES (NÃO REPETIR):\n${history.map((h,i)=>`V${i+1}: POV=${h.pov}, Hook=${h.hook}`).join('\n')}\n${VIDEO_NUMBERS_RULES[videoNum]}`
+        ? `\nVÍDEOS ANTERIORES — OBRIGATÓRIO NÃO REPETIR NADA:\n${history.map((h,i)=>`V${i+1}: Momento=${h.momento||'?'}, Estética=${h.estetica||'?'}, Cenário=${h.cenario||'?'}, POV=${h.pov}, Hook=${h.hook}`).join('\n')}\n${VIDEO_NUMBERS_RULES[videoNum]}\n\nREGRA CRÍTICA: Escolha combinação de 3 CAMADAS (momento + estação + estética) COMPLETAMENTE DIFERENTE dos vídeos anteriores. Use momento DIFERENTE, estética DIFERENTE, cenário DIFERENTE, POV DIFERENTE e hook DIFERENTE.`
         : '';
 
       const viralCtx = form.tipoVideo.includes('viral')
@@ -128,7 +128,7 @@ Preço: R$${form.preco}
 Descrição: ${form.descricao||'Não fornecida'}
 Tipo: ${form.tipoVideo}
 IA para vídeo: ${form.engine}
-${form.auto ? 'Sugira as 3 camadas.' : `Momento: ${form.momento}\nEstação: ${form.estacao}\nEstética: ${form.estetica}`}
+${form.auto ? `Sugira as 3 camadas (momento + estação + estética) automaticamente.${videoNum > 1 ? ' OBRIGATÓRIO: escolha camadas COMPLETAMENTE DIFERENTES dos vídeos anteriores listados acima.' : ''}` : `Momento: ${form.momento}\nEstação: ${form.estacao}\nEstética: ${form.estetica}`}
 ${prevCtx}${viralCtx}
 
 Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
@@ -296,6 +296,12 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       hook: content?.ganchos?.[sel.gancho]?.formato,
       gancho: content?.ganchos?.[sel.gancho]?.texto,
       detalhe: content?.detalhes?.[sel.detalhe]?.texto,
+      // Save camadas + visual so Claude knows what was used before
+      momento: prompts?.camadas?.momento,
+      estacao: prompts?.camadas?.estacao,
+      estetica: prompts?.camadas?.estetica,
+      cenario: prompts?.visual?.cenario,
+      cabelo: prompts?.visual?.cabelo,
     }]);
     setVideoNum(prev => prev + 1);
     setPrompts(null); setContent(null);
