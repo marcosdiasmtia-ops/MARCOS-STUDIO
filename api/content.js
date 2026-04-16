@@ -67,7 +67,7 @@ Retorne APENAS JSON válido, sem markdown:
 }`;
 
     const prevContext = previousContent?.length > 0
-      ? `\n\nTEXTOS JÁ USADOS (NÃO REPETIR NENHUM):\n${previousContent.map((p, i) => `Vídeo ${i + 1}: gancho="${p.gancho}" detalhe="${p.detalhe}"`).join('\n')}`
+      ? `\n\nTEXTOS JÁ USADOS (NÃO REPETIR NENHUM):\n${previousContent.map((p, i) => `Vídeo ${i + 1}: momento="${p.momento||'?'}" estética="${p.estetica||'?'}" gancho="${p.gancho}" detalhe="${p.detalhe}"`).join('\n')}\n\nOBRIGATÓRIO: Crie textos com tom e abordagem COMPLETAMENTE DIFERENTES dos vídeos anteriores.`
       : '';
 
     const trendContext = trendData
