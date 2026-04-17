@@ -251,6 +251,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
         negative_prompt: clip.negativo || '',
         duration: clip.duracao?.replace('s','') || '5',
         aspect_ratio: '9:16',
+        generate_audio: form.tipoVideo.toLowerCase().includes('com voz'),
       };
       if (form.engine.startsWith('kling') && generatedImages.costas) {
         params.element_image_url = generatedImages.costas;
