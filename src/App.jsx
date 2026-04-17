@@ -92,7 +92,7 @@ export default function App() {
   const [content, setContent] = useState(null); // From Claude (TikTok content - 3 options)
   const [selections, setSelections] = useState({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
   const [generatedImages, setGeneratedImages] = useState({ frontal:null, costas:null });
-  const [generatedVideo, setGeneratedVideo] = useState(null);
+  const [generatedVideos, setGeneratedVideos] = useState({}); // { 0: url, 1: url }
   const [backPromptReady, setBackPromptReady] = useState(false); // true after back prompt regenerated from frontal image
 
   // Video tracking
@@ -237,10 +237,11 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
   // ── Step 3: Generate Video via fal.ai ──
   const handleGenerateVideo = async (clipIndex = 0) => {
-    setLoading(true); setLoadingStep('video'); setError(null);
-    setLoadingMsg('Enviando para geração de vídeo...');
+    setLoading(true); setLoadingStep(`video-${clipIndex}`); setError(null);
+    const videoPrompts = prompts.promptsVideo || [prompts.promptVideo];
+    const totalClips = videoPrompts.length;
+    setLoadingMsg(`Gerando vídeo clipe ${clipIndex + 1}/${totalClips}...`);
     try {
-      const videoPrompts = prompts.promptsVideo || [prompts.promptVideo];
       const clip = videoPrompts[clipIndex] || videoPrompts[0];
 
       const params = {
@@ -258,27 +259,26 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       const result = await generateVideo(params);
 
       if (result.video) {
-        setGeneratedVideo(result.video.url);
+        setGeneratedVideos(prev => ({ ...prev, [clipIndex]: result.video.url }));
       } else if (result.requestId) {
-        setLoadingMsg('Vídeo em processamento...');
-        // Poll for result using URLs from fal.ai
+        setLoadingMsg(`Clipe ${clipIndex + 1}/${totalClips} em processamento...`);
         let done = false;
         let attempts = 0;
-        const maxAttempts = 120; // 10 minutes max (5s interval)
+        const maxAttempts = 120;
         while (!done && attempts < maxAttempts) {
           await new Promise(r => setTimeout(r, 5000));
           attempts++;
           const status = await checkVideoStatus(result.requestId, result.endpoint, result.statusUrl, result.responseUrl);
           if (status.status === 'COMPLETED') {
-            setGeneratedVideo(status.result?.video?.url);
+            setGeneratedVideos(prev => ({ ...prev, [clipIndex]: status.result?.video?.url }));
             done = true;
           } else if (status.status === 'FAILED') {
-            throw new Error('Geração de vídeo falhou');
+            throw new Error(`Geração do clipe ${clipIndex + 1} falhou`);
           } else {
-            setLoadingMsg(`Vídeo: ${status.status || 'processando'}... (${attempts * 5}s)`);
+            setLoadingMsg(`Clipe ${clipIndex + 1}: ${status.status || 'processando'}... (${attempts * 5}s)`);
           }
         }
-        if (!done) throw new Error('Timeout: vídeo não completou em 10 minutos. Tente novamente.');
+        if (!done) throw new Error('Timeout: vídeo não completou em 10 minutos.');
       }
     } catch(err) {
       console.error('Video generation error:', err);
@@ -306,7 +306,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
     setVideoNum(prev => prev + 1);
     setPrompts(null); setContent(null);
     setGeneratedImages({ frontal:null, costas:null });
-    setGeneratedVideo(null); setLoadingStep(null); setBackPromptReady(false);
+    setGeneratedVideos({}); setLoadingStep(null); setBackPromptReady(false);
     setSelections({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
     setPage('form');
   };
@@ -314,7 +314,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   const newProduct = () => {
     setForm({ nome:'', preco:'', descricao:'', tipoVideo:'', engine:'kling', momento:'', estacao:'', estetica:'', auto:true, promptViral:'', transcricaoViral:'', fotoProduto:null, fotoProdutoUrl:null, fotoCostas:null, fotoCostasUrl:null });
     setPrompts(null); setContent(null); setHistory([]); setVideoNum(1);
-    setGeneratedImages({ frontal:null, costas:null }); setGeneratedVideo(null); setLoadingStep(null); setBackPromptReady(false);
+    setGeneratedImages({ frontal:null, costas:null }); setGeneratedVideos({}); setLoadingStep(null); setBackPromptReady(false);
     setSelections({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
     setPage('form');
   };
@@ -527,20 +527,45 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
           {/* Video Prompts + Generation */}
           <Accordion title={`Vídeo — ${form.engine.toUpperCase()}`} icon="🎬" open>
-            {(r.promptsVideo || [r.promptVideo]).map((clip,i) => (
-              <div key={i}>
-                <CodeBlock label={`CLIPE ${i+1} ${clip.duracao||''}`} content={clip.prompt}/>
-                {clip.negativo && <CodeBlock label="NEGATIVE VÍDEO" content={clip.negativo}/>}
-              </div>
-            ))}
-            {generatedImages.frontal && (
+            {(r.promptsVideo || [r.promptVideo]).map((clip,i) => {
+              const totalClips = (r.promptsVideo || [r.promptVideo]).length;
+              const isMultiClip = totalClips > 1;
+              return (
+                <div key={i}>
+                  <CodeBlock label={`CLIPE ${i+1}${clip.duracao ? ` — ${clip.duracao}` : ''}`} content={clip.prompt}/>
+                  {clip.negativo && <CodeBlock label={`NEGATIVE CLIPE ${i+1}`} content={clip.negativo}/>}
+
+                  {/* Per-clip generate button (Veo 3 multi-clip) */}
+                  {isMultiClip && generatedImages.frontal && (
+                    <div className="gen-row">
+                      <button className="gen-btn video" onClick={()=>handleGenerateVideo(i)} disabled={loadingStep !== null}>
+                        {loadingStep === `video-${i}` ? `⏳ Gerando clipe ${i+1}...` : `🎬 Gerar Clipe ${i+1} (${form.engine})`}
+                      </button>
+                      {generatedVideos[i] && <div className="gen-preview"><video src={generatedVideos[i]} controls style={{width:'100%',borderRadius:8}}/></div>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Single generate button (Kling / Grok — 1 clip) */}
+            {(r.promptsVideo || [r.promptVideo]).length <= 1 && generatedImages.frontal && (
               <div className="gen-row">
-                <button className="gen-btn video" onClick={()=>handleGenerateVideo()} disabled={loadingStep !== null}>
-                  {loadingStep === 'video' ? '⏳ Gerando vídeo...' : `🎬 Gerar Vídeo (${form.engine})`}
+                <button className="gen-btn video" onClick={()=>handleGenerateVideo(0)} disabled={loadingStep !== null}>
+                  {loadingStep === 'video-0' ? '⏳ Gerando vídeo...' : `🎬 Gerar Vídeo (${form.engine})`}
                 </button>
-                {generatedVideo && <div className="gen-preview"><video src={generatedVideo} controls style={{width:'100%',borderRadius:8}}/></div>}
+                {generatedVideos[0] && <div className="gen-preview"><video src={generatedVideos[0]} controls style={{width:'100%',borderRadius:8}}/></div>}
               </div>
             )}
+
+            {/* Hint: all clips generated */}
+            {(r.promptsVideo || [r.promptVideo]).length > 1 && Object.keys(generatedVideos).length === (r.promptsVideo || [r.promptVideo]).length && (
+              <div className="dif-box" style={{marginTop:12}}>
+                <span className="dif-label">✅ Todos os clipes gerados</span>
+                <p className="hint" style={{marginTop:6}}>Junte os {(r.promptsVideo || [r.promptVideo]).length} clipes no CapCut para montar o vídeo final de 15s.</p>
+              </div>
+            )}
+
             {!generatedImages.frontal && <p className="hint">Gere a imagem frontal primeiro para habilitar o vídeo.</p>}
           </Accordion>
 
