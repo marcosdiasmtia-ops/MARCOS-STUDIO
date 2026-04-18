@@ -1,5 +1,64 @@
-// fal.ai Nano Banana image generation proxy
+// fal.ai Nano Banana image generation proxy (v2.2 — unified model pipeline)
 // Routes to /edit (with reference images) or text-to-image (without)
+//
+// v2.2 FIXES aplicados quando há image_urls (rota /edit):
+//   Fix 1 — Âncora de identidade: prefixa o prompt com instrução explícita
+//           pro modelo preservar rosto, pele, cabelo e proporções da 1a imagem
+//   Fix 2 — bodyDescription injetada: se recebida, entra na âncora pra guiar
+//           o modelo sobre o tipo corporal esperado
+//   Fix 3 — Sanitização do negative prompt: remove itens específicos da Lígia
+//           (no freckles, nose ring missing, wrong hair color/texture) que
+//           atrapalham geração de outras influencers
+
+// Itens do negative prompt v8.2 que são específicos da Lígia e NÃO devem
+// ir pra outras modelos. Mantemos tudo que é genérico (qualidade, anatomia).
+const LIGIA_SPECIFIC_NEGATIVES = [
+  'no freckles',
+  'nose ring missing',
+  'wrong hair color',
+  'wrong hair texture',
+  'straight hair without waves',
+  'different face',
+  'blue eyes',
+  'brown eyes',
+];
+
+function sanitizeNegativePrompt(negativePrompt) {
+  if (!negativePrompt || typeof negativePrompt !== 'string') return negativePrompt;
+  let sanitized = negativePrompt;
+  for (const item of LIGIA_SPECIFIC_NEGATIVES) {
+    // Remove o termo + vírgula/espaço subsequente (flexível entre vírgula e newline)
+    const re = new RegExp(`\\s*${item.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\s*,?`, 'gi');
+    sanitized = sanitized.replace(re, '');
+  }
+  // Limpar múltiplas vírgulas ou espaços extras resultantes
+  sanitized = sanitized.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').replace(/\s*,\s*/g, ', ').trim();
+  if (sanitized.startsWith(',')) sanitized = sanitized.slice(1).trim();
+  if (sanitized.endsWith(',')) sanitized = sanitized.slice(0, -1).trim();
+  return sanitized;
+}
+
+function buildIdentityAnchor(profileName, bodyDescription, numRefImages) {
+  // Âncora de identidade: prefixa o prompt quando há 2+ imagens de referência
+  // Ordem esperada: image_urls[0] = influencer/frontal, image_urls[1] = produto
+  const parts = [];
+  if (numRefImages >= 2) {
+    parts.push(
+      `Woman identical to the first reference image (same exact face, skin tone, hair color and texture, eye color, body proportions)`
+    );
+    if (bodyDescription && bodyDescription.trim()) {
+      parts.push(`body type: ${bodyDescription.trim()}`);
+    }
+    parts.push(`wearing the outfit from the second reference image (preserve exact product design, cut, texture and color).`);
+  } else if (numRefImages === 1) {
+    // Apenas 1 imagem de ref — tratamos como identidade da influencer
+    parts.push(
+      `Woman identical to the reference image (same exact face, skin tone, hair, body proportions)${bodyDescription ? `, body type: ${bodyDescription.trim()}` : ''}.`
+    );
+  }
+  return parts.length ? parts.join(', ') + ' ' : '';
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -11,7 +70,14 @@ export default async function handler(req, res) {
   if (!FAL_KEY) return res.status(500).json({ error: 'FAL_KEY not configured' });
 
   try {
-    const { prompt, image_urls, aspect_ratio = '9:16' } = req.body;
+    const {
+      prompt,
+      image_urls,
+      aspect_ratio = '9:16',
+      profile_name,       // v2.2
+      body_description,   // v2.2
+      negative_prompt,    // v2.2 (opcional — se o frontend quiser passar explicitamente)
+    } = req.body;
 
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
@@ -19,27 +85,38 @@ export default async function handler(req, res) {
     const hasImages = Array.isArray(image_urls) && image_urls.length > 0;
     const endpoint = hasImages ? 'fal-ai/nano-banana/edit' : 'fal-ai/nano-banana';
 
-    console.log(`[image] Using endpoint: ${endpoint}, hasImages: ${hasImages}`);
+    // v2.2: prefixar prompt com âncora de identidade quando há referências
+    let finalPrompt = prompt;
+    if (hasImages) {
+      const anchor = buildIdentityAnchor(profile_name, body_description, image_urls.length);
+      if (anchor) {
+        finalPrompt = anchor + prompt;
+      }
+    }
+
+    // v2.2: sanitizar negative prompt (se enviado)
+    const finalNegative = negative_prompt ? sanitizeNegativePrompt(negative_prompt) : null;
+
+    console.log(`[image v2.2] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}`);
 
     // Build request body
     const body = {
-      prompt,
+      prompt: finalPrompt,
       aspect_ratio,
       output_format: 'png',
-      num_images: 1
+      num_images: 1,
     };
-    if (hasImages) {
-      body.image_urls = image_urls;
-    }
+    if (hasImages) body.image_urls = image_urls;
+    if (finalNegative) body.negative_prompt = finalNegative;
 
     // Submit to queue
     const submitRes = await fetch(`https://queue.fal.run/${endpoint}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Key ${FAL_KEY}`
+        'Authorization': `Key ${FAL_KEY}`,
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
 
     if (!submitRes.ok) {
@@ -63,7 +140,6 @@ export default async function handler(req, res) {
     const responseUrl = submitData.response_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}`;
 
     console.log(`[image] Queued: ${requestId}`);
-    console.log(`[image] Status URL: ${statusUrl}`);
 
     // Poll for result
     let attempts = 0;
@@ -73,7 +149,7 @@ export default async function handler(req, res) {
       attempts++;
 
       const statusRes = await fetch(statusUrl, {
-        headers: { 'Authorization': `Key ${FAL_KEY}` }
+        headers: { 'Authorization': `Key ${FAL_KEY}` },
       });
       if (!statusRes.ok) {
         console.error(`[image] Status check error ${statusRes.status}`);
@@ -83,7 +159,7 @@ export default async function handler(req, res) {
 
       if (status.status === 'COMPLETED') {
         const resultRes = await fetch(responseUrl, {
-          headers: { 'Authorization': `Key ${FAL_KEY}` }
+          headers: { 'Authorization': `Key ${FAL_KEY}` },
         });
         const result = await resultRes.json();
         return res.status(200).json(result);
