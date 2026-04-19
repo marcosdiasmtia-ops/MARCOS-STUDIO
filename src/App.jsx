@@ -249,6 +249,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       // v2.2: passa nome e descrição corporal pro backend aplicar os 3 fixes
       // v2.4: passa também o facePrompt do perfil pra âncora de identidade turbinada
       // v2.7: passa também o productDescription para ancora do produto
+      // v3.0: passa viewType pro backend bifurcar a anchor (evita contradição "identical + back")
       const imageUrl = await generateImage(
         prompt,
         urls.length > 0 ? urls : undefined,
@@ -257,6 +258,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
           bodyDescription: influencer.bodyDescription,
           facePrompt: influencer.facePrompt,
           productDescription: productDesc,
+          viewType: type === 'costas' ? 'back' : 'frontal',  // v3.0
         }
       );
       setGeneratedImages(prev => ({ ...prev, [type]: imageUrl }));
