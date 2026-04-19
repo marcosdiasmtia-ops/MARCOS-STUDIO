@@ -33,8 +33,10 @@ function sanitizeNegativePrompt(negativePrompt) {
   return sanitized;
 }
 
-function buildIdentityAnchor(profileName, bodyDescription, facePrompt, numRefImages) {
-  // v2.4: âncora usa facePrompt quando disponível
+function buildIdentityAnchor(profileName, bodyDescription, facePrompt, productDescription, numRefImages) {
+  // v2.7: agora tambem aceita productDescription — descricao tecnica do produto
+  // gerada pelo Claude Vision para forcar Nano Banana a preservar detalhes
+  // incomuns (cortes assimetricos, decotes unicos, etc).
   // Ordem esperada: image_urls[0] = influencer/frontal, image_urls[1] = produto
   const parts = [];
 
@@ -42,10 +44,8 @@ function buildIdentityAnchor(profileName, bodyDescription, facePrompt, numRefIma
     parts.push(`Woman identical to the FIRST reference image only`);
 
     if (facePrompt && facePrompt.trim()) {
-      // Usa a descrição detalhada gerada pelo Claude Vision
       parts.push(`Face details (MUST match exactly): ${facePrompt.trim()}`);
     } else {
-      // Fallback pra quando o perfil não tem facePrompt ainda
       parts.push(`same exact face, skin tone, hair color and texture, eye color, body proportions, and any distinctive marks or features visible in that first image`);
     }
 
@@ -53,13 +53,28 @@ function buildIdentityAnchor(profileName, bodyDescription, facePrompt, numRefIma
       parts.push(`Body type: ${bodyDescription.trim()}`);
     }
 
-    parts.push(
-      `She is wearing the clothing item shown in the SECOND reference image. ` +
-      `From the second image, use ONLY the garment design, cut, fabric texture and color. ` +
-      `IGNORE completely the person wearing it in the second image — do NOT copy their tattoos, ` +
-      `skin marks, hair, face, body type, makeup or any other physical feature. ` +
-      `The person's identity and body come EXCLUSIVELY from the first reference image.`
-    );
+    // v2.7: se temos descricao tecnica do produto, instruir o modelo a seguir
+    if (productDescription && productDescription.trim()) {
+      parts.push(
+        `She is wearing the EXACT garment shown in the SECOND reference image. ` +
+        `Garment details (MUST preserve exactly): ${productDescription.trim()}. ` +
+        `Do NOT simplify the design, do NOT make asymmetric cuts symmetric, do NOT change necklines, ` +
+        `do NOT alter peplum direction or length. The garment from the second image is the ONLY source ` +
+        `for clothing — do NOT add accessories or pieces not shown there. ` +
+        `IGNORE completely the person wearing it in the second image — do NOT copy their tattoos, ` +
+        `skin marks, hair, face, body type, makeup or any physical feature. ` +
+        `The person's identity and body come EXCLUSIVELY from the first reference image.`
+      );
+    } else {
+      // fallback v2.3 para quando nao ha descricao analisada
+      parts.push(
+        `She is wearing the clothing item shown in the SECOND reference image. ` +
+        `From the second image, use ONLY the garment design, cut, fabric texture and color. ` +
+        `IGNORE completely the person wearing it in the second image — do NOT copy their tattoos, ` +
+        `skin marks, hair, face, body type, makeup or any other physical feature. ` +
+        `The person's identity and body come EXCLUSIVELY from the first reference image.`
+      );
+    }
   } else if (numRefImages === 1) {
     const faceTxt = facePrompt && facePrompt.trim()
       ? `Face details (MUST match exactly): ${facePrompt.trim()}`
@@ -89,7 +104,8 @@ export default async function handler(req, res) {
       aspect_ratio = '9:16',
       profile_name,
       body_description,
-      face_prompt,      // v2.4
+      face_prompt,            // v2.4
+      product_description,    // v2.7
       negative_prompt,
     } = req.body;
 
@@ -100,7 +116,7 @@ export default async function handler(req, res) {
 
     let finalPrompt = prompt;
     if (hasImages) {
-      const anchor = buildIdentityAnchor(profile_name, body_description, face_prompt, image_urls.length);
+      const anchor = buildIdentityAnchor(profile_name, body_description, face_prompt, product_description, image_urls.length);
       if (anchor) {
         finalPrompt = anchor + prompt;
       }
@@ -108,7 +124,7 @@ export default async function handler(req, res) {
 
     const finalNegative = negative_prompt ? sanitizeNegativePrompt(negative_prompt) : null;
 
-    console.log(`[image v2.4] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}`);
+    console.log(`[image v2.7] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}`);
 
     const body = {
       prompt: finalPrompt,
