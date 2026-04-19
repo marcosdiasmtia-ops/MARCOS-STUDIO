@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v2.2 — unified model pipeline)
+// API helper functions for all backend calls (v2.4 — facePrompt pipeline)
 
 export async function callClaude(system, userMessage) {
   const res = await fetch('/api/generate', {
@@ -45,7 +45,32 @@ export async function uploadToFal(base64, mimeType, fileName) {
   return data.url;
 }
 
-// v2.2: agora recebe também profile_name e body_description para reforçar identidade
+// v2.4: analisa a foto da influencer via Claude Vision e devolve
+// { facePrompt, bodyDescription } pra preencher o formulário automaticamente
+export async function analyzeIdentity(base64, mimeType) {
+  const res = await fetch('/api/analyze-identity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base64, mimeType })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('analyze-identity response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao analisar foto (${res.status}). Verifique os logs no Vercel.`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return {
+    facePrompt: data.facePrompt || '',
+    bodyDescription: data.bodyDescription || ''
+  };
+}
+
+// v2.4: agora recebe também facePrompt junto com profileName/bodyDescription
 export async function generateImage(prompt, imageUrls, extras = {}) {
   const res = await fetch('/api/image', {
     method: 'POST',
@@ -56,6 +81,7 @@ export async function generateImage(prompt, imageUrls, extras = {}) {
       aspect_ratio: '9:16',
       profile_name: extras.profileName || null,
       body_description: extras.bodyDescription || null,
+      face_prompt: extras.facePrompt || null,  // v2.4
     })
   });
   const text = await res.text();
@@ -130,9 +156,8 @@ export function fileToBase64(file) {
   });
 }
 
-// ══════════ Profile storage (v2.2 — Lígia removida do hardcode) ══════════
-// Todo perfil é tratado uniformemente. Se o usuário quiser a Lígia como
-// primeira influencer, ele cadastra manualmente pelo app.
+// ══════════ Profile storage (v2.4 — inclui facePrompt) ══════════
+// O perfil agora tem: { id, name, photo, bodyDescription, facePrompt, createdAt }
 const PROFILES_KEY = 'ligia-ugc-profiles';
 
 export function getProfiles() {

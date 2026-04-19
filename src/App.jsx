@@ -210,10 +210,15 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       }
 
       // v2.2: passa nome e descrição corporal pro backend aplicar os 3 fixes
+      // v2.4: passa também o facePrompt do perfil pra âncora de identidade turbinada
       const imageUrl = await generateImage(
         prompt,
         urls.length > 0 ? urls : undefined,
-        { profileName: influencer.name, bodyDescription: influencer.bodyDescription }
+        {
+          profileName: influencer.name,
+          bodyDescription: influencer.bodyDescription,
+          facePrompt: influencer.facePrompt,
+        }
       );
       setGeneratedImages(prev => ({ ...prev, [type]: imageUrl }));
     } catch(err) {
@@ -617,7 +622,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
               : <button className="main-btn" onClick={generatePrompts}>🔄 Regenerar</button>}
           </div>
 
-          <p className="footer">UGC Studio v2.2 · Claude + fal.ai · Kling · Veo3 · Grok</p>
+          <p className="footer">UGC Studio v2.4 · Claude + fal.ai · Kling · Veo3 · Grok</p>
         </div>
       </div>
     );
