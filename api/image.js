@@ -1,17 +1,15 @@
-// fal.ai Nano Banana image generation proxy (v2.2 — unified model pipeline)
+// fal.ai Nano Banana image generation proxy (v2.3 — Fix B: anti-contamination)
 // Routes to /edit (with reference images) or text-to-image (without)
 //
-// v2.2 FIXES aplicados quando há image_urls (rota /edit):
-//   Fix 1 — Âncora de identidade: prefixa o prompt com instrução explícita
-//           pro modelo preservar rosto, pele, cabelo e proporções da 1a imagem
-//   Fix 2 — bodyDescription injetada: se recebida, entra na âncora pra guiar
-//           o modelo sobre o tipo corporal esperado
-//   Fix 3 — Sanitização do negative prompt: remove itens específicos da Lígia
-//           (no freckles, nose ring missing, wrong hair color/texture) que
-//           atrapalham geração de outras influencers
+// HISTÓRICO DE FIXES:
+// v2.2 — Fix 1: âncora de identidade
+//        Fix 2: bodyDescription injetada
+//        Fix 3: sanitização do negative prompt
+// v2.3 — Fix B: âncora reforçada contra contaminação da imagem 2
+//        Quando há 2+ refs, a imagem 2 é "só a roupa". Features da pessoa
+//        que aparece na imagem 2 (tatuagens, cabelo, pele, rosto) não devem
+//        ser copiadas. Identidade vem EXCLUSIVAMENTE da imagem 1.
 
-// Itens do negative prompt v8.2 que são específicos da Lígia e NÃO devem
-// ir pra outras modelos. Mantemos tudo que é genérico (qualidade, anatomia).
 const LIGIA_SPECIFIC_NEGATIVES = [
   'no freckles',
   'nose ring missing',
@@ -27,11 +25,9 @@ function sanitizeNegativePrompt(negativePrompt) {
   if (!negativePrompt || typeof negativePrompt !== 'string') return negativePrompt;
   let sanitized = negativePrompt;
   for (const item of LIGIA_SPECIFIC_NEGATIVES) {
-    // Remove o termo + vírgula/espaço subsequente (flexível entre vírgula e newline)
     const re = new RegExp(`\\s*${item.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\s*,?`, 'gi');
     sanitized = sanitized.replace(re, '');
   }
-  // Limpar múltiplas vírgulas ou espaços extras resultantes
   sanitized = sanitized.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').replace(/\s*,\s*/g, ', ').trim();
   if (sanitized.startsWith(',')) sanitized = sanitized.slice(1).trim();
   if (sanitized.endsWith(',')) sanitized = sanitized.slice(0, -1).trim();
@@ -39,24 +35,33 @@ function sanitizeNegativePrompt(negativePrompt) {
 }
 
 function buildIdentityAnchor(profileName, bodyDescription, numRefImages) {
-  // Âncora de identidade: prefixa o prompt quando há 2+ imagens de referência
+  // v2.3: âncora reforçada contra contaminação da imagem 2
   // Ordem esperada: image_urls[0] = influencer/frontal, image_urls[1] = produto
   const parts = [];
+
   if (numRefImages >= 2) {
     parts.push(
-      `Woman identical to the first reference image (same exact face, skin tone, hair color and texture, eye color, body proportions)`
+      `Woman identical to the FIRST reference image only: same exact face, skin tone, hair color and texture, eye color, body proportions, and any distinctive marks or features visible in that first image`
     );
+
     if (bodyDescription && bodyDescription.trim()) {
       parts.push(`body type: ${bodyDescription.trim()}`);
     }
-    parts.push(`wearing the outfit from the second reference image (preserve exact product design, cut, texture and color).`);
+
+    parts.push(
+      `She is wearing the clothing item shown in the SECOND reference image. ` +
+      `From the second image, use ONLY the garment design, cut, fabric texture and color. ` +
+      `IGNORE completely the person wearing it in the second image — do NOT copy their tattoos, ` +
+      `skin marks, hair, face, body type, makeup or any other physical feature. ` +
+      `The person's identity and body come EXCLUSIVELY from the first reference image.`
+    );
   } else if (numRefImages === 1) {
-    // Apenas 1 imagem de ref — tratamos como identidade da influencer
     parts.push(
       `Woman identical to the reference image (same exact face, skin tone, hair, body proportions)${bodyDescription ? `, body type: ${bodyDescription.trim()}` : ''}.`
     );
   }
-  return parts.length ? parts.join(', ') + ' ' : '';
+
+  return parts.length ? parts.join('. ') + '. ' : '';
 }
 
 export default async function handler(req, res) {
@@ -74,18 +79,16 @@ export default async function handler(req, res) {
       prompt,
       image_urls,
       aspect_ratio = '9:16',
-      profile_name,       // v2.2
-      body_description,   // v2.2
-      negative_prompt,    // v2.2 (opcional — se o frontend quiser passar explicitamente)
+      profile_name,
+      body_description,
+      negative_prompt,
     } = req.body;
 
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
-    // Choose endpoint: /edit requires image_urls, text-to-image does not
     const hasImages = Array.isArray(image_urls) && image_urls.length > 0;
     const endpoint = hasImages ? 'fal-ai/nano-banana/edit' : 'fal-ai/nano-banana';
 
-    // v2.2: prefixar prompt com âncora de identidade quando há referências
     let finalPrompt = prompt;
     if (hasImages) {
       const anchor = buildIdentityAnchor(profile_name, body_description, image_urls.length);
@@ -94,12 +97,10 @@ export default async function handler(req, res) {
       }
     }
 
-    // v2.2: sanitizar negative prompt (se enviado)
     const finalNegative = negative_prompt ? sanitizeNegativePrompt(negative_prompt) : null;
 
-    console.log(`[image v2.2] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}`);
+    console.log(`[image v2.3] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}`);
 
-    // Build request body
     const body = {
       prompt: finalPrompt,
       aspect_ratio,
@@ -109,7 +110,6 @@ export default async function handler(req, res) {
     if (hasImages) body.image_urls = image_urls;
     if (finalNegative) body.negative_prompt = finalNegative;
 
-    // Submit to queue
     const submitRes = await fetch(`https://queue.fal.run/${endpoint}`, {
       method: 'POST',
       headers: {
@@ -128,22 +128,19 @@ export default async function handler(req, res) {
     const submitData = await submitRes.json();
 
     if (submitData.images) {
-      // Sync mode - result immediately
       return res.status(200).json(submitData);
     }
 
     const requestId = submitData.request_id;
     if (!requestId) return res.status(500).json({ error: 'No request_id', data: submitData });
 
-    // Use URLs from submit response (correct paths without subpath)
     const statusUrl = submitData.status_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}/status`;
     const responseUrl = submitData.response_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}`;
 
     console.log(`[image] Queued: ${requestId}`);
 
-    // Poll for result
     let attempts = 0;
-    const maxAttempts = 60; // 2 minutes max
+    const maxAttempts = 60;
     while (attempts < maxAttempts) {
       await new Promise(r => setTimeout(r, 2000));
       attempts++;
