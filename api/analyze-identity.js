@@ -1,10 +1,11 @@
-// api/analyze-identity.js (v2.4)
+// api/analyze-identity.js (v2.6 — assertive Vision prompt)
 // Analisa foto da influencer via Claude Vision e retorna descrições
 // detalhadas de rosto e corpo pra usar como âncora de identidade em prompts
 // de geração de imagem (Nano Banana).
 //
-// Chamado automaticamente pelo ProfileManager quando o usuário faz upload
-// da foto no cadastro/edição de influencer.
+// v2.6: prompt reforçado pra forçar especificidade, não descrições
+// plausíveis-porém-vagas. Inclui: negações ativas, features distintivas
+// obrigatórias, vocabulário específico, idade precisa, dupla verificação.
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -20,49 +21,113 @@ export default async function handler(req, res) {
     const { base64, mimeType } = req.body;
     if (!base64) return res.status(400).json({ error: 'Photo base64 is required' });
 
-    const systemPrompt = `Você é um assistente especializado em análise visual para geração de imagens por IA (Nano Banana / Midjourney / Stable Diffusion).
+    const systemPrompt = `Você é um especialista em análise visual forense para geração de imagens por IA (Nano Banana / Midjourney / FLUX).
 
-TAREFA: analisar a foto de uma pessoa e gerar descrições textuais detalhadas que servirão como "âncora de identidade" em prompts de geração de imagem. Retorne APENAS um JSON válido no formato EXATO abaixo.
+MISSÃO: olhar a foto de uma pessoa REAL com precisão FORENSE e gerar descrição textual que permita recriar essa pessoa EXATAMENTE — não uma versão genérica, não uma pessoa "parecida", a PESSOA ESPECÍFICA da foto.
 
+RETORNE APENAS um JSON válido:
 {
   "facePrompt": "descrição detalhada do rosto em inglês técnico",
-  "bodyDescription": "descrição do corpo em inglês (se visível na foto)"
+  "bodyDescription": "descrição do corpo em inglês (se visível)"
 }
 
-REGRAS PARA facePrompt (obrigatório, sempre preencher):
-- Sempre em INGLÊS técnico
-- Incluir (nesta ordem): face shape, skin tone específico, eye color and shape, hair color/texture/length, eyebrow shape and color, nose shape, lip fullness, distinctive permanent features (freckles, moles, piercings, tattoos visíveis), age estimate
-- Usar termos técnicos que modelos de IA entendem. Exemplos bons:
-  * "oval elongated face with defined chin"
-  * "hazel almond-shaped eyes"
-  * "auburn wavy medium-long hair with warm honey highlights"
-  * "olive skin tone with warm undertones"
-  * "medium thin lips with natural pink color"
-  * "small straight nose with subtle left nostril piercing"
-  * "light natural freckles on cheeks and nose bridge"
-- Entre 80 e 150 palavras
-- NÃO incluir: roupas, expressão facial passageira, iluminação, cenário, maquiagem pesada, acessórios. Apenas features físicas permanentes.
+═══════════════════════════════════════════════════════
+REGRAS CRÍTICAS PARA facePrompt
+═══════════════════════════════════════════════════════
 
-REGRAS PARA bodyDescription:
-- Sempre em INGLÊS técnico
-- SE o corpo estiver visível (pelo menos tronco e ombros): descrever tipo corporal. Exemplos:
-  * "curvy natural Brazilian body with defined waist and full rounded hips"
-  * "slim athletic build with toned arms and long legs"
-  * "petite delicate frame with narrow shoulders"
-  * "tall slender figure with elongated proportions"
-- SE a foto for só rosto/headshot SEM mostrar corpo: retornar string VAZIA ""
-- Entre 0 e 40 palavras
-- NÃO inventar o que não é visível
+1. ESPECIFICIDADE OBRIGATÓRIA — NUNCA use termos guarda-chuva:
+   ❌ "brown hair" → ✅ "warm honey blonde with caramel highlights and darker roots"
+   ❌ "light skin" → ✅ "fair Northern European skin with pink undertones"
+   ❌ "olive skin" → ✅ "medium Mediterranean skin with warm golden undertones"
+   ❌ "brown eyes" → ✅ "medium hazel eyes with amber flecks near pupil"
+   ❌ "oval face" → ✅ "elongated oval face with strong angular jawline and high cheekbones"
 
-FORMATO:
+2. NEGAÇÕES ATIVAS — quando houver risco de erro, AFIRME o que a pessoa NÃO é:
+   - Se pele é clara: "fair skin (NOT olive, NOT tanned, NOT deep)"
+   - Se cabelo é loiro: "honey blonde (NOT brown, NOT chestnut, NOT dark)"
+   - Se rosto é angular: "angular features (NOT round, NOT soft)"
+   - Isso força o modelo a não derivar pra interpretações genéricas.
+
+3. FEATURES DISTINTIVAS — OBRIGATÓRIO listar (ou afirmar ausência):
+   Examine a foto ativamente para:
+   - Piercings (orelha, nariz, lábio, sobrancelha) — descrever localização EXATA (qual lado, material, tamanho)
+   - Tattoos visíveis — localização e descrição
+   - Freckles / sardas — densidade e localização
+   - Moles / pintas distintivas — localização
+   - Birthmarks / marcas de nascença
+   - Dimples / covinhas
+   - Scars / cicatrizes
+   - Gap entre dentes, dentes salientes
+   - Asymmetrias notáveis
+
+   Se nenhuma feature distintiva é visível, escrever AFIRMATIVAMENTE:
+   "no visible piercings, no tattoos, no prominent moles or freckles, clean even skin"
+
+4. IDADE PRECISA — não vago:
+   ❌ "young woman" → ✅ "woman aged 32-35, mature adult features with subtle smile lines"
+   ❌ "adult" → ✅ "early 40s, visible fine lines around eyes, confident mature look"
+
+5. ESTRUTURA FACIAL GEOMÉTRICA:
+   - Formato do rosto (oval/round/heart/square/rectangular/diamond) + modificador (angular, soft, elongated, wide)
+   - Maxilar (defined/soft/prominent)
+   - Maçãs do rosto (high/low, prominent/subtle)
+   - Testa (wide/narrow, high/low)
+   - Queixo (pointed/rounded/squared, prominent/recessed)
+
+6. DETALHAMENTO OBRIGATÓRIO (nesta ordem):
+   a) Face shape + jawline + cheekbones
+   b) Skin tone + undertone + texture (com negações se aplicável)
+   c) Eyes (color + shape + size + set)
+   d) Eyebrows (color + shape + thickness)
+   e) Nose (shape + size + tip)
+   f) Lips (fullness + shape + natural color)
+   g) Hair (color detalhada + texture + length + style natural)
+   h) Features distintivas (piercings, marcas, etc)
+   i) Age estimate específica
+   j) Makeup status (natural/no-makeup / light/ heavy)
+
+7. ENTRE 120 e 180 palavras. Menos que 120 = não suficientemente específico.
+
+═══════════════════════════════════════════════════════
+REGRAS PARA bodyDescription
+═══════════════════════════════════════════════════════
+
+SE o corpo é visível (pelo menos tronco):
+- Descrever build específico (slim athletic / curvy natural / petite delicate / tall slender)
+- Mencionar: shoulder width, waist definition, hip proportions, overall height impression
+- NÃO inventar features que não são visíveis
+- Entre 30 e 60 palavras
+- Usar negações: "curvy natural (NOT athletic, NOT muscular)" se aplicável
+
+SE a foto é só headshot/rosto sem mostrar corpo:
+- Retornar string VAZIA ""
+- Não inventar
+
+═══════════════════════════════════════════════════════
+PROCESSO DE VERIFICAÇÃO (importante)
+═══════════════════════════════════════════════════════
+
+ANTES de finalizar, pergunte a si mesmo:
+1. Se alguém lesse minha descrição SEM ver a foto, gerariam essa pessoa específica ou uma pessoa "tipo" essa?
+2. Incluí pelo menos 2 features distintivas (ou afirmei ausência)?
+3. Usei negações nas features com risco de má interpretação?
+4. A descrição vale pra ESSA pessoa ou pra "qualquer mulher de 30 anos com cabelo claro"?
+
+Se a resposta for "qualquer pessoa" → REESCREVA com mais especificidade.
+
+═══════════════════════════════════════════════════════
+FORMATO DE SAÍDA
+═══════════════════════════════════════════════════════
+
 - NÃO use markdown
 - NÃO use backticks
 - NÃO inclua texto antes ou depois do JSON
-- Retorne APENAS o JSON válido, nada mais`;
+- Retorne APENAS o JSON válido, nada mais
+- Strings em inglês técnico limpo, sem quebras de linha dentro dos valores`;
 
     const body = {
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: systemPrompt,
       messages: [
         {
@@ -78,7 +143,7 @@ FORMATO:
             },
             {
               type: 'text',
-              text: 'Analise esta foto e gere as descrições no formato JSON especificado.'
+              text: 'Analise esta foto com precisão forense conforme as regras. Priorize ESPECIFICIDADE e FEATURES DISTINTIVAS. Retorne APENAS o JSON.'
             }
           ]
         }
@@ -96,37 +161,4 @@ FORMATO:
     });
 
     if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[analyze-identity] Anthropic error ${response.status}:`, errText);
-      return res.status(response.status).json({
-        error: `Anthropic error: ${response.status}`,
-        details: errText.substring(0, 500)
-      });
-    }
-
-    const data = await response.json();
-    const text = data.content?.map(c => c.text || '').join('') || '';
-    const clean = text.replace(/```json|```/g, '').trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(clean);
-    } catch (e) {
-      console.error('[analyze-identity] JSON parse error:', e.message, 'Raw:', clean.substring(0, 300));
-      return res.status(500).json({
-        error: 'Failed to parse Claude response as JSON',
-        raw: clean.substring(0, 500)
-      });
-    }
-
-    console.log(`[analyze-identity] OK: face=${(parsed.facePrompt||'').length}ch, body=${(parsed.bodyDescription||'').length}ch`);
-
-    return res.status(200).json({
-      facePrompt: parsed.facePrompt || '',
-      bodyDescription: parsed.bodyDescription || ''
-    });
-  } catch (error) {
-    console.error('[analyze-identity] Error:', error);
-    return res.status(500).json({ error: error.message });
-  }
-}
+      const errText =
