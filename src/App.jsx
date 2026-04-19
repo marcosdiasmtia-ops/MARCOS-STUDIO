@@ -70,8 +70,10 @@ function Accordion({ title, icon, children, open: def = false }) {
 
 export default function App() {
   const [page, setPage] = useState('form'); // form | loading | results | content
-  const [showProfiles, setShowProfiles] = useState(false);
-  const [influencer, setInfluencer] = useState(getProfiles()[0]); // Default: Ligia
+  // Na v2.2 não há mais Lígia hardcoded: o estado inicial é null até o usuário cadastrar/selecionar
+  const [influencer, setInfluencer] = useState(() => getProfiles()[0] || null);
+  // Se não há perfil, força abertura do ProfileManager no primeiro render
+  const [showProfiles, setShowProfiles] = useState(() => getProfiles().length === 0);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(null); // null | 'frontal' | 'costas' | 'video'
   const [loadingMsg, setLoadingMsg] = useState('');
@@ -109,6 +111,13 @@ export default function App() {
 
   // ── Step 1: Generate Visual Prompts ──
   const generatePrompts = async () => {
+    // v2.2: exige perfil antes de qualquer coisa
+    if (!influencer || !influencer.name) {
+      setShowProfiles(true);
+      setError('Cadastre e selecione uma influencer antes de gerar vídeos.');
+      return;
+    }
+
     setPage('loading'); setError(null);
     setLoadingMsg('Gerando prompts visuais...');
 
@@ -169,6 +178,11 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
     setLoadingStep(type); setError(null);
     setLoadingMsg(`Gerando imagem ${type}...`);
     try {
+      // v2.2: sempre exige perfil com foto antes de gerar
+      if (!influencer || !influencer.photo) {
+        throw new Error('Selecione uma influencer com foto de referência antes de gerar imagens.');
+      }
+
       const prompt = type === 'frontal' ? prompts.promptImagemFrontal?.positivo : prompts.promptImagemCostas?.positivo;
       if (!prompt) throw new Error('Prompt não encontrado');
 
@@ -176,20 +190,18 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       const urls = [];
 
       if (type === 'frontal') {
-        // FRONTAL: influencer photo (if custom) + product front photo
-        if (influencer.photo) {
-          const b64 = influencer.photo.split(',')[1];
-          const url = await uploadToFal(b64, 'image/png', 'influencer.png');
-          urls.push(url);
-        }
+        // FRONTAL: foto da influencer (obrigatória v2.2) + produto frontal
+        const b64 = influencer.photo.split(',')[1];
+        const url = await uploadToFal(b64, 'image/png', 'influencer.png');
+        urls.push(url);
         if (form.fotoProduto) {
-          const url = await uploadToFal(form.fotoProduto.base64, form.fotoProduto.mimeType, 'produto.png');
-          urls.push(url);
+          const urlP = await uploadToFal(form.fotoProduto.base64, form.fotoProduto.mimeType, 'produto.png');
+          urls.push(urlP);
         }
       } else {
-        // COSTAS: generated frontal image + product back photo
+        // COSTAS: imagem frontal gerada (identidade travada) + produto costas
         if (generatedImages.frontal) {
-          urls.push(generatedImages.frontal); // Already a URL, no upload needed
+          urls.push(generatedImages.frontal); // já é URL, sem upload
         }
         if (form.fotoCostas) {
           const url = await uploadToFal(form.fotoCostas.base64, form.fotoCostas.mimeType, 'costas.png');
@@ -197,7 +209,12 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
         }
       }
 
-      const imageUrl = await generateImage(prompt, urls.length > 0 ? urls : undefined);
+      // v2.2: passa nome e descrição corporal pro backend aplicar os 3 fixes
+      const imageUrl = await generateImage(
+        prompt,
+        urls.length > 0 ? urls : undefined,
+        { profileName: influencer.name, bodyDescription: influencer.bodyDescription }
+      );
       setGeneratedImages(prev => ({ ...prev, [type]: imageUrl }));
     } catch(err) {
       console.error('Image generation error:', err);
@@ -324,11 +341,17 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   if (page === 'form') return (
     <div className="app">
       <div className="container">
-        {showProfiles && <ProfileManager onClose={() => setShowProfiles(false)} onSelect={p => { setInfluencer(p); setShowProfiles(false); }}/>}
+        {showProfiles && (
+          <ProfileManager
+            onClose={() => setShowProfiles(false)}
+            onSelect={p => { setInfluencer(p); setShowProfiles(false); }}
+            forceCreate={!influencer}
+          />
+        )}
 
         <header className="header">
           <div className="badge">⚡ v8.2 + Automação</div>
-          <h1 className="title">Lígia UGC Studio</h1>
+          <h1 className="title">UGC Studio</h1>
           <p className="subtitle">TikTok Shop · Imagem · Vídeo · Conteúdo</p>
         </header>
 
@@ -336,11 +359,13 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
         <div className="card influencer-selector" onClick={() => setShowProfiles(true)}>
           <div className="inf-row">
             <div className="inf-avatar">
-              {influencer?.photo ? <img src={influencer.photo} alt=""/> : <span>{influencer?.isLigia ? '⭐' : influencer?.name?.[0]}</span>}
+              {influencer?.photo
+                ? <img src={influencer.photo} alt=""/>
+                : <span>{influencer?.name?.[0] || '+'}</span>}
             </div>
             <div className="inf-info">
-              <div className="inf-name">{influencer?.name || 'Selecionar'} {influencer?.isLigia && <span className="badge-sm">padrão</span>}</div>
-              <div className="inf-hint">Toque para trocar influencer</div>
+              <div className="inf-name">{influencer?.name || 'Cadastrar influencer'}</div>
+              <div className="inf-hint">{influencer ? 'Toque para trocar influencer' : 'Cadastre a primeira influencer para começar'}</div>
             </div>
             <span className="inf-arrow">▸</span>
           </div>
@@ -592,7 +617,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
               : <button className="main-btn" onClick={generatePrompts}>🔄 Regenerar</button>}
           </div>
 
-          <p className="footer">Lígia UGC Studio v2.0 · Claude + fal.ai · Kling · Veo3 · Grok</p>
+          <p className="footer">UGC Studio v2.2 · Claude + fal.ai · Kling · Veo3 · Grok</p>
         </div>
       </div>
     );

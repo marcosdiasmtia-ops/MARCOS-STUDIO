@@ -1,4 +1,4 @@
-// API helper functions for all backend calls
+// API helper functions for all backend calls (v2.2 — unified model pipeline)
 
 export async function callClaude(system, userMessage) {
   const res = await fetch('/api/generate', {
@@ -45,13 +45,19 @@ export async function uploadToFal(base64, mimeType, fileName) {
   return data.url;
 }
 
-export async function generateImage(prompt, imageUrls) {
+// v2.2: agora recebe também profile_name e body_description para reforçar identidade
+export async function generateImage(prompt, imageUrls, extras = {}) {
   const res = await fetch('/api/image', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, image_urls: imageUrls, aspect_ratio: '9:16' })
+    body: JSON.stringify({
+      prompt,
+      image_urls: imageUrls,
+      aspect_ratio: '9:16',
+      profile_name: extras.profileName || null,
+      body_description: extras.bodyDescription || null,
+    })
   });
-  // Handle non-JSON error responses (Vercel returns HTML on crashes)
   const text = await res.text();
   let data;
   try {
@@ -80,7 +86,7 @@ export async function generateBackPrompt({ frontalImageUrl, frontalPrompt, visua
     throw new Error(`Erro ao gerar prompt de costas. Verifique os logs no Vercel.`);
   }
   if (data.error) throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
-  return data; // { positivo, negativo }
+  return data;
 }
 
 export async function generateVideo(params) {
@@ -98,7 +104,7 @@ export async function generateVideo(params) {
     throw new Error(`Servidor retornou erro ${res.status}. Verifique os logs no Vercel.`);
   }
   if (data.error) throw new Error(data.error);
-  return data; // { requestId, endpoint } or { video }
+  return data;
 }
 
 export async function checkVideoStatus(requestId, endpoint, statusUrl, responseUrl) {
@@ -124,29 +130,17 @@ export function fileToBase64(file) {
   });
 }
 
-// Profile storage
+// ══════════ Profile storage (v2.2 — Lígia removida do hardcode) ══════════
+// Todo perfil é tratado uniformemente. Se o usuário quiser a Lígia como
+// primeira influencer, ele cadastra manualmente pelo app.
 const PROFILES_KEY = 'ligia-ugc-profiles';
-
-const LIGIA_PROFILE = {
-  id: 'ligia',
-  name: 'Lígia',
-  isLigia: true,
-  bodyDescription: 'Curvy natural Brazilian body, defined waist, full rounded hips, smooth flat belly, medium feminine shoulders, natural voluminous figure, NOT athletic NOT muscular NOT slim NOT model NOT thin',
-  photo: null, // Ligia uses the v8.2 identity
-  createdAt: '2024-01-01'
-};
 
 export function getProfiles() {
   try {
     const stored = localStorage.getItem(PROFILES_KEY);
-    const profiles = stored ? JSON.parse(stored) : [];
-    // Always include Ligia first
-    if (!profiles.find(p => p.id === 'ligia')) {
-      profiles.unshift(LIGIA_PROFILE);
-    }
-    return profiles;
+    return stored ? JSON.parse(stored) : [];
   } catch {
-    return [LIGIA_PROFILE];
+    return [];
   }
 }
 
@@ -154,7 +148,7 @@ export function saveProfile(profile) {
   const profiles = getProfiles();
   const idx = profiles.findIndex(p => p.id === profile.id);
   if (idx >= 0) {
-    profiles[idx] = profile;
+    profiles[idx] = { ...profiles[idx], ...profile };
   } else {
     profiles.push({ ...profile, id: Date.now().toString(), createdAt: new Date().toISOString() });
   }
@@ -163,7 +157,6 @@ export function saveProfile(profile) {
 }
 
 export function deleteProfile(id) {
-  if (id === 'ligia') return getProfiles(); // Can't delete Ligia
   const profiles = getProfiles().filter(p => p.id !== id);
   localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
   return profiles;
