@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v2.4 — facePrompt pipeline)
+// API helper functions for all backend calls (v3.0 — view_type bifurcation)
 
 export async function callClaude(system, userMessage) {
   const res = await fetch('/api/generate', {
@@ -93,6 +93,7 @@ export async function analyzeProduct(base64, mimeType, view = 'frontal') {
 
 // v2.4: agora recebe também facePrompt junto com profileName/bodyDescription
 // v2.7: agora recebe também productDescription (analise tecnica da peca)
+// v3.0: agora recebe também viewType ('frontal' | 'back') — bifurca anchor no backend
 export async function generateImage(prompt, imageUrls, extras = {}) {
   const res = await fetch('/api/image', {
     method: 'POST',
@@ -105,6 +106,7 @@ export async function generateImage(prompt, imageUrls, extras = {}) {
       body_description: extras.bodyDescription || null,
       face_prompt: extras.facePrompt || null,
       product_description: extras.productDescription || null,  // v2.7
+      view_type: extras.viewType || 'frontal',                  // v3.0
     })
   });
   const text = await res.text();
