@@ -27,7 +27,7 @@ export function getSystemPrompt(influencer) {
 }
 
 export const VIDEO_NUMBERS_RULES = {
-  1: "Primeiro vídeo — use qualquer categoria de POV e formato de hook.",
-  2: "Segundo vídeo — NÃO repita a categoria de POV nem o formato de hook do vídeo 1. NÃO repita cenário idêntico. Varie a música.",
-  3: "Terceiro vídeo — NÃO repita POV, hook, cenário ou música dos vídeos 1 e 2. Use combinação completamente diferente."
+  1: "Primeiro vídeo — use qualquer categoria de POV e formato de hook. Prefira cenário limpo e pose natural.",
+  2: "Segundo vídeo — use categoria de POV diferente do vídeo 1 e formato de hook diferente. Cenário pode variar MODERADAMENTE (ex: mesma casa, cômodo diferente OU ângulo diferente). Varie a música. IMPORTANTE: mantenha SIMPLICIDADE visual. Evite poses complexas com torção corporal. Para imagem de costas, corpo TOTALMENTE de costas (NUNCA 'looking over shoulder', 'glancing back', 'turning head to camera' ou pose torcida).",
+  3: "Terceiro vídeo — use categoria de POV diferente dos vídeos 1 e 2. Use hook de formato diferente. Cenário pode variar em 1 dimensão (cômodo OU iluminação OU ângulo), mas NÃO precisa ser exótico. Varie a música. CRÍTICO: PRIORIZE sempre simplicidade visual sobre variação criativa. Cenário com no máximo 3 elementos principais ao fundo. Pose simples e natural. Para imagem de costas, corpo TOTALMENTE de costas (NUNCA pose torcida ou olhando por cima do ombro)."
 };

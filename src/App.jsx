@@ -124,7 +124,7 @@ export default function App() {
     try {
       const system = getSystemPrompt(influencer);
       const prevCtx = history.length > 0
-        ? `\nVÍDEOS ANTERIORES — OBRIGATÓRIO NÃO REPETIR NADA:\n${history.map((h,i)=>`V${i+1}: Momento=${h.momento||'?'}, Estética=${h.estetica||'?'}, Cenário=${h.cenario||'?'}, POV=${h.pov}, Hook=${h.hook}`).join('\n')}\n${VIDEO_NUMBERS_RULES[videoNum]}\n\nREGRA CRÍTICA: Escolha combinação de 3 CAMADAS (momento + estação + estética) COMPLETAMENTE DIFERENTE dos vídeos anteriores. Use momento DIFERENTE, estética DIFERENTE, cenário DIFERENTE, POV DIFERENTE e hook DIFERENTE.`
+        ? `\nVÍDEOS ANTERIORES (para varia sem exagerar):\n${history.map((h,i)=>`V${i+1}: Momento=${h.momento||'?'}, Estética=${h.estetica||'?'}, Cenário=${h.cenario||'?'}, POV=${h.pov}, Hook=${h.hook}`).join('\n')}\n${VIDEO_NUMBERS_RULES[videoNum]}\n\nREGRA DE VARIAÇÃO EQUILIBRADA: varie 1 ou 2 das 3 camadas (momento/estação/estética) em relação aos vídeos anteriores. NÃO precisa variar tudo. PRIORIDADE ABSOLUTA: simplicidade visual e poses naturais. REGRAS INVIOLÁVEIS para proteger qualidade de geração de imagem:\n- Cenários com no MÁXIMO 3 elementos principais ao fundo (ex: sofá + planta + janela). NUNCA cenário com muitos objetos dispersos.\n- Pose frontal: simples e natural (em pé, mão na cintura, segurando bolsa). NUNCA pose elaborada ou com torção.\n- Pose de costas: corpo TOTALMENTE de costas (back to camera), pernas de costas, quadril de costas, cabeça voltada para frente (apenas nuca visível). PROIBIDO: 'looking over shoulder', 'glancing back to camera', 'turning head slightly', 'looking at camera from behind' — qualquer pose que misture 'de frente' com 'de costas' é REJEITADA.\n- Variação pode estar na ILUMINAÇÃO, CABELO, ACESSÓRIOS ou ÂNGULO MENOR — NÃO precisa variar pose ou cenário dramaticamente.`
         : '';
 
       const viralCtx = form.tipoVideo.includes('viral')
@@ -137,7 +137,7 @@ Preço atual: R$${form.preco}${form.precoOriginal ? `\nPreço original (antes da
 Descrição: ${form.descricao||'Não fornecida'}
 Tipo: ${form.tipoVideo}
 IA para vídeo: ${form.engine}
-${form.auto ? `Sugira as 3 camadas (momento + estação + estética) automaticamente.${videoNum > 1 ? ' OBRIGATÓRIO: escolha camadas COMPLETAMENTE DIFERENTES dos vídeos anteriores listados acima.' : ''}` : `Momento: ${form.momento}\nEstação: ${form.estacao}\nEstética: ${form.estetica}`}
+${form.auto ? `Sugira as 3 camadas (momento + estação + estética) automaticamente.${videoNum > 1 ? ' VARIE 1-2 das 3 camadas em relação aos vídeos anteriores listados acima — NÃO precisa variar tudo. Priorize simplicidade visual sobre variação extrema.' : ''}` : `Momento: ${form.momento}\nEstação: ${form.estacao}\nEstética: ${form.estetica}`}
 ${prevCtx}${viralCtx}
 
 Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
@@ -664,7 +664,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
               : <button className="main-btn" onClick={generatePrompts}>🔄 Regenerar</button>}
           </div>
 
-          <p className="footer">UGC Studio v2.7 · Claude + fal.ai · Kling · Veo3 · Grok</p>
+          <p className="footer">UGC Studio v2.8 · Claude + fal.ai · Kling · Veo3 · Grok</p>
         </div>
       </div>
     );
