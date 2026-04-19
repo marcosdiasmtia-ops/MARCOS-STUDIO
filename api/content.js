@@ -1,5 +1,6 @@
 // Separate Claude call for TikTok content generation
 // Uses web search results + product specifics for better quality
+// v2.5: aceita precoOriginal pra gerar textos com desconto "de R$X por R$Y"
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -11,7 +12,7 @@ export default async function handler(req, res) {
   if (!API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   try {
-    const { produto, diferenciais, momento, estetica, preco, trendData, videoNum, previousContent } = req.body;
+    const { produto, diferenciais, momento, estetica, preco, precoOriginal, trendData, videoNum, previousContent } = req.body;
 
     const system = `Você é uma copywriter brasileira de 28 anos que vive de TikTok Shop afiliado. Você faz R$15k/mês só com conteúdo orgânico. Você fala como amiga real — com gírias, emoção e verdade.
 
@@ -74,8 +75,12 @@ Retorne APENAS JSON válido, sem markdown:
       ? `\n\nTENDÊNCIAS ATUAIS DO TIKTOK (usar como inspiração):\n${trendData}`
       : '';
 
+    const promoContext = precoOriginal
+      ? `\nPREÇO ORIGINAL (antes da promoção): R$${precoOriginal}\nIMPORTANTE: Este produto está em PROMOÇÃO. Nos precoCTAs e na linha 4 das descrições, use AMBOS os preços no formato "de R$${precoOriginal} por menos de R$${preco}" para criar senso de desconto. No POV (gancho), pode usar "achei esse por R$${preco}, vi por R$${precoOriginal}..." ou similar. Varie entre as 3 opções — pelo menos 2 das 3 devem mostrar o desconto explícito.`
+      : '';
+
     const userMsg = `PRODUTO: ${produto}
-PREÇO: R$${preco}
+PREÇO: R$${preco}${promoContext}
 DIFERENCIAIS REAIS: ${diferenciais?.join(', ') || 'Não informados'}
 MOMENTO/OCASIÃO: ${momento}
 ESTÉTICA: ${estetica}
