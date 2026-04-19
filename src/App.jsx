@@ -81,7 +81,7 @@ export default function App() {
 
   // Form state
   const [form, setForm] = useState({
-    nome:'', preco:'', descricao:'', tipoVideo:'', engine:'kling',
+    nome:'', preco:'', precoOriginal:'', descricao:'', tipoVideo:'', engine:'kling',
     momento:'', estacao:'', estetica:'', auto:true,
     promptViral:'', transcricaoViral:'',
     fotoProduto: null, fotoProdutoUrl: null,
@@ -133,7 +133,7 @@ export default function App() {
 
       const msg = `PRODUTO — VÍDEO ${videoNum}/3:
 Nome: ${form.nome}
-Preço: R$${form.preco}
+Preço atual: R$${form.preco}${form.precoOriginal ? `\nPreço original (antes da promoção): R$${form.precoOriginal}\nIMPORTANTE: este produto está em PROMOÇÃO. Use AMBOS os preços nos textos TikTok para criar senso de desconto. Formato preferido: "de R$${form.precoOriginal} por menos de R$${form.preco}".` : ''}
 Descrição: ${form.descricao||'Não fornecida'}
 Tipo: ${form.tipoVideo}
 IA para vídeo: ${form.engine}
@@ -156,6 +156,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       const contentResult = await generateContent({
         produto: form.nome,
         preco: form.preco,
+        precoOriginal: form.precoOriginal || null,
         diferenciais: result.diferenciais,
         momento: result.camadas?.momento,
         estetica: result.camadas?.estetica,
@@ -335,7 +336,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   };
 
   const newProduct = () => {
-    setForm({ nome:'', preco:'', descricao:'', tipoVideo:'', engine:'kling', momento:'', estacao:'', estetica:'', auto:true, promptViral:'', transcricaoViral:'', fotoProduto:null, fotoProdutoUrl:null, fotoCostas:null, fotoCostasUrl:null });
+    setForm({ nome:'', preco:'', precoOriginal:'', descricao:'', tipoVideo:'', engine:'kling', momento:'', estacao:'', estetica:'', auto:true, promptViral:'', transcricaoViral:'', fotoProduto:null, fotoProdutoUrl:null, fotoCostas:null, fotoCostasUrl:null });
     setPrompts(null); setContent(null); setHistory([]); setVideoNum(1);
     setGeneratedImages({ frontal:null, costas:null }); setGeneratedVideos({}); setLoadingStep(null); setBackPromptReady(false);
     setSelections({ gancho:0, detalhe:0, precoCTA:0, descricao:0, hashtags:0 });
@@ -381,10 +382,13 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
           <h3 className="card-title">📦 Produto</h3>
           <div className="grid-2">
             <div className="field"><label>Nome</label><input value={form.nome} onChange={e=>set('nome',e.target.value)} placeholder="Ex: Legging Suplex Premium"/></div>
-            <div className="field"><label>Preço (R$)</label><input value={form.preco} onChange={e=>set('preco',e.target.value)} placeholder="79.90"/></div>
+            <div className="field"><label>Preço atual (R$)</label><input value={form.preco} onChange={e=>set('preco',e.target.value)} placeholder="79.90"/></div>
           </div>
-          <div className="field"><label>Descrição / diferenciais <span className="opt">(opcional)</span></label>
-            <textarea value={form.descricao} onChange={e=>set('descricao',e.target.value)} placeholder="Tecido suplex premium, cintura alta, não marca..." rows={3}/>
+          <div className="field"><label>Preço original — antes da promoção <span className="opt">(opcional)</span></label>
+            <input value={form.precoOriginal} onChange={e=>set('precoOriginal',e.target.value)} placeholder="Ex: 129.90 (se preenchido, gera 'de R$X por R$Y' nos textos)"/>
+          </div>
+          <div className="field"><label>Informações do produto <span className="opt">(opcional, mas recomendado)</span></label>
+            <textarea value={form.descricao} onChange={e=>set('descricao',e.target.value)} placeholder='Quanto mais info real, melhor o vídeo. Ex: "Tecido suplex premium que não marca. 500+ vendas com nota 4.9. Frete grátis acima de R$100. Troca fácil em 7 dias. Combina com qualquer look."' rows={4}/>
           </div>
           <div className="grid-2">
             <div className="field"><label>📸 Foto do produto (frontal)</label>
@@ -622,7 +626,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
               : <button className="main-btn" onClick={generatePrompts}>🔄 Regenerar</button>}
           </div>
 
-          <p className="footer">UGC Studio v2.4 · Claude + fal.ai · Kling · Veo3 · Grok</p>
+          <p className="footer">UGC Studio v2.5 · Claude + fal.ai · Kling · Veo3 · Grok</p>
         </div>
       </div>
     );
