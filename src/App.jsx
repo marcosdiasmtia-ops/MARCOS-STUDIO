@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getSystemPrompt, VIDEO_NUMBERS_RULES } from './systemPrompt';
-import { callClaude, generateContent, searchTrends, generateImage, generateBackPrompt, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles } from './api';
+import { callClaude, generateContent, searchTrends, generateImage, generateBackPrompt, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles, analyzeProduct } from './api';
 import ProfileManager from './ProfileManager';
 import './styles.css';
 
@@ -190,12 +190,32 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
       // Upload reference images to fal.ai
       const urls = [];
 
+      // v2.7: descricao tecnica do produto analisada pelo Claude Vision
+      let productDesc = null;
+
       if (type === 'frontal') {
         // FRONTAL: foto da influencer (obrigatória v2.2) + produto frontal
         const b64 = influencer.photo.split(',')[1];
         const url = await uploadToFal(b64, 'image/png', 'influencer.png');
         urls.push(url);
         if (form.fotoProduto) {
+          // v2.7: analisa o produto (com cache por base64)
+          if (form.fotoProduto.analyzedBase64 !== form.fotoProduto.base64) {
+            setLoadingMsg('Analisando detalhes do produto...');
+            try {
+              productDesc = await analyzeProduct(form.fotoProduto.base64, form.fotoProduto.mimeType, 'frontal');
+              // cache a analise no state pra reuso
+              setForm(p => ({
+                ...p,
+                fotoProduto: { ...p.fotoProduto, analyzedBase64: p.fotoProduto.base64, productDesc }
+              }));
+            } catch (e) {
+              console.warn('[analyze-product frontal] falhou, seguindo sem descricao:', e.message);
+            }
+          } else {
+            productDesc = form.fotoProduto.productDesc;
+          }
+          setLoadingMsg(`Gerando imagem frontal...`);
           const urlP = await uploadToFal(form.fotoProduto.base64, form.fotoProduto.mimeType, 'produto.png');
           urls.push(urlP);
         }
@@ -205,6 +225,22 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
           urls.push(generatedImages.frontal); // já é URL, sem upload
         }
         if (form.fotoCostas) {
+          // v2.7: analisa a foto de costas do produto
+          if (form.fotoCostas.analyzedBase64 !== form.fotoCostas.base64) {
+            setLoadingMsg('Analisando detalhes do produto (costas)...');
+            try {
+              productDesc = await analyzeProduct(form.fotoCostas.base64, form.fotoCostas.mimeType, 'back');
+              setForm(p => ({
+                ...p,
+                fotoCostas: { ...p.fotoCostas, analyzedBase64: p.fotoCostas.base64, productDesc }
+              }));
+            } catch (e) {
+              console.warn('[analyze-product back] falhou, seguindo sem descricao:', e.message);
+            }
+          } else {
+            productDesc = form.fotoCostas.productDesc;
+          }
+          setLoadingMsg(`Gerando imagem de costas...`);
           const url = await uploadToFal(form.fotoCostas.base64, form.fotoCostas.mimeType, 'costas.png');
           urls.push(url);
         }
@@ -212,6 +248,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
       // v2.2: passa nome e descrição corporal pro backend aplicar os 3 fixes
       // v2.4: passa também o facePrompt do perfil pra âncora de identidade turbinada
+      // v2.7: passa também o productDescription para ancora do produto
       const imageUrl = await generateImage(
         prompt,
         urls.length > 0 ? urls : undefined,
@@ -219,6 +256,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
           profileName: influencer.name,
           bodyDescription: influencer.bodyDescription,
           facePrompt: influencer.facePrompt,
+          productDescription: productDesc,
         }
       );
       setGeneratedImages(prev => ({ ...prev, [type]: imageUrl }));
@@ -626,7 +664,7 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
               : <button className="main-btn" onClick={generatePrompts}>🔄 Regenerar</button>}
           </div>
 
-          <p className="footer">UGC Studio v2.5 · Claude + fal.ai · Kling · Veo3 · Grok</p>
+          <p className="footer">UGC Studio v2.7 · Claude + fal.ai · Kling · Veo3 · Grok</p>
         </div>
       </div>
     );

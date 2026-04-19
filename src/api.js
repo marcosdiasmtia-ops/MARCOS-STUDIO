@@ -70,7 +70,29 @@ export async function analyzeIdentity(base64, mimeType) {
   };
 }
 
+// v2.7: analisa foto de peca de roupa e retorna descricao tecnica do corte/design
+export async function analyzeProduct(base64, mimeType, view = 'frontal') {
+  const res = await fetch('/api/analyze-product', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base64, mimeType, view })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('analyze-product response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao analisar produto (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data.productDescription || '';
+}
+
 // v2.4: agora recebe também facePrompt junto com profileName/bodyDescription
+// v2.7: agora recebe também productDescription (analise tecnica da peca)
 export async function generateImage(prompt, imageUrls, extras = {}) {
   const res = await fetch('/api/image', {
     method: 'POST',
@@ -81,7 +103,8 @@ export async function generateImage(prompt, imageUrls, extras = {}) {
       aspect_ratio: '9:16',
       profile_name: extras.profileName || null,
       body_description: extras.bodyDescription || null,
-      face_prompt: extras.facePrompt || null,  // v2.4
+      face_prompt: extras.facePrompt || null,
+      product_description: extras.productDescription || null,  // v2.7
     })
   });
   const text = await res.text();
