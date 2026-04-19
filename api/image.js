@@ -1,14 +1,13 @@
-// fal.ai Nano Banana image generation proxy (v2.3 — Fix B: anti-contamination)
-// Routes to /edit (with reference images) or text-to-image (without)
+// fal.ai Nano Banana image generation proxy (v2.4 — facePrompt)
 //
 // HISTÓRICO DE FIXES:
 // v2.2 — Fix 1: âncora de identidade
 //        Fix 2: bodyDescription injetada
 //        Fix 3: sanitização do negative prompt
 // v2.3 — Fix B: âncora reforçada contra contaminação da imagem 2
-//        Quando há 2+ refs, a imagem 2 é "só a roupa". Features da pessoa
-//        que aparece na imagem 2 (tatuagens, cabelo, pele, rosto) não devem
-//        ser copiadas. Identidade vem EXCLUSIVAMENTE da imagem 1.
+// v2.4 — facePrompt: âncora agora usa descrição textual detalhada do rosto
+//        (gerada pelo Claude Vision ao cadastrar a influencer), aumentando
+//        muito a consistência visual entre gerações.
 
 const LIGIA_SPECIFIC_NEGATIVES = [
   'no freckles',
@@ -34,18 +33,24 @@ function sanitizeNegativePrompt(negativePrompt) {
   return sanitized;
 }
 
-function buildIdentityAnchor(profileName, bodyDescription, numRefImages) {
-  // v2.3: âncora reforçada contra contaminação da imagem 2
+function buildIdentityAnchor(profileName, bodyDescription, facePrompt, numRefImages) {
+  // v2.4: âncora usa facePrompt quando disponível
   // Ordem esperada: image_urls[0] = influencer/frontal, image_urls[1] = produto
   const parts = [];
 
   if (numRefImages >= 2) {
-    parts.push(
-      `Woman identical to the FIRST reference image only: same exact face, skin tone, hair color and texture, eye color, body proportions, and any distinctive marks or features visible in that first image`
-    );
+    parts.push(`Woman identical to the FIRST reference image only`);
+
+    if (facePrompt && facePrompt.trim()) {
+      // Usa a descrição detalhada gerada pelo Claude Vision
+      parts.push(`Face details (MUST match exactly): ${facePrompt.trim()}`);
+    } else {
+      // Fallback pra quando o perfil não tem facePrompt ainda
+      parts.push(`same exact face, skin tone, hair color and texture, eye color, body proportions, and any distinctive marks or features visible in that first image`);
+    }
 
     if (bodyDescription && bodyDescription.trim()) {
-      parts.push(`body type: ${bodyDescription.trim()}`);
+      parts.push(`Body type: ${bodyDescription.trim()}`);
     }
 
     parts.push(
@@ -56,8 +61,11 @@ function buildIdentityAnchor(profileName, bodyDescription, numRefImages) {
       `The person's identity and body come EXCLUSIVELY from the first reference image.`
     );
   } else if (numRefImages === 1) {
+    const faceTxt = facePrompt && facePrompt.trim()
+      ? `Face details (MUST match exactly): ${facePrompt.trim()}`
+      : 'same exact face, skin tone, hair, body proportions';
     parts.push(
-      `Woman identical to the reference image (same exact face, skin tone, hair, body proportions)${bodyDescription ? `, body type: ${bodyDescription.trim()}` : ''}.`
+      `Woman identical to the reference image. ${faceTxt}${bodyDescription ? `. Body type: ${bodyDescription.trim()}` : ''}.`
     );
   }
 
@@ -81,6 +89,7 @@ export default async function handler(req, res) {
       aspect_ratio = '9:16',
       profile_name,
       body_description,
+      face_prompt,      // v2.4
       negative_prompt,
     } = req.body;
 
@@ -91,7 +100,7 @@ export default async function handler(req, res) {
 
     let finalPrompt = prompt;
     if (hasImages) {
-      const anchor = buildIdentityAnchor(profile_name, body_description, image_urls.length);
+      const anchor = buildIdentityAnchor(profile_name, body_description, face_prompt, image_urls.length);
       if (anchor) {
         finalPrompt = anchor + prompt;
       }
@@ -99,7 +108,7 @@ export default async function handler(req, res) {
 
     const finalNegative = negative_prompt ? sanitizeNegativePrompt(negative_prompt) : null;
 
-    console.log(`[image v2.3] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}`);
+    console.log(`[image v2.4] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}`);
 
     const body = {
       prompt: finalPrompt,
