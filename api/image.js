@@ -1,13 +1,12 @@
-// fal.ai Nano Banana image generation proxy (v2.4 — facePrompt)
+// fal.ai Nano Banana image generation proxy (v2.7.1)
+// Routes to /edit (with reference images) or text-to-image (without)
 //
-// HISTÓRICO DE FIXES:
-// v2.2 — Fix 1: âncora de identidade
-//        Fix 2: bodyDescription injetada
-//        Fix 3: sanitização do negative prompt
-// v2.3 — Fix B: âncora reforçada contra contaminação da imagem 2
-// v2.4 — facePrompt: âncora agora usa descrição textual detalhada do rosto
-//        (gerada pelo Claude Vision ao cadastrar a influencer), aumentando
-//        muito a consistência visual entre gerações.
+// HISTORICO:
+// v2.2 — Fix 1: ancora de identidade; Fix 2: bodyDescription injetada; Fix 3: sanitizacao negative
+// v2.3 — Fix B: ancora reforcada contra contaminacao da imagem 2
+// v2.4 — facePrompt: descricao textual detalhada do rosto (Claude Vision)
+// v2.7 — productDescription: descricao tecnica da peca (Claude Vision)
+// v2.7.1 — anti-contaminacao reforcada quando ha productDescription
 
 const LIGIA_SPECIFIC_NEGATIVES = [
   'no freckles',
@@ -34,10 +33,6 @@ function sanitizeNegativePrompt(negativePrompt) {
 }
 
 function buildIdentityAnchor(profileName, bodyDescription, facePrompt, productDescription, numRefImages) {
-  // v2.7: agora tambem aceita productDescription — descricao tecnica do produto
-  // gerada pelo Claude Vision para forcar Nano Banana a preservar detalhes
-  // incomuns (cortes assimetricos, decotes unicos, etc).
-  // Ordem esperada: image_urls[0] = influencer/frontal, image_urls[1] = produto
   const parts = [];
 
   if (numRefImages >= 2) {
@@ -53,20 +48,25 @@ function buildIdentityAnchor(profileName, bodyDescription, facePrompt, productDe
       parts.push(`Body type: ${bodyDescription.trim()}`);
     }
 
-    // v2.7: se temos descricao tecnica do produto, instruir o modelo a seguir
     if (productDescription && productDescription.trim()) {
       parts.push(
         `She is wearing the EXACT garment shown in the SECOND reference image. ` +
         `Garment details (MUST preserve exactly): ${productDescription.trim()}. ` +
         `Do NOT simplify the design, do NOT make asymmetric cuts symmetric, do NOT change necklines, ` +
         `do NOT alter peplum direction or length. The garment from the second image is the ONLY source ` +
-        `for clothing — do NOT add accessories or pieces not shown there. ` +
-        `IGNORE completely the person wearing it in the second image — do NOT copy their tattoos, ` +
-        `skin marks, hair, face, body type, makeup or any physical feature. ` +
-        `The person's identity and body come EXCLUSIVELY from the first reference image.`
+        `for clothing — do NOT add accessories or pieces not shown there`
+      );
+      // v2.7.1: reforca anti-contaminacao no FINAL da ancora
+      parts.push(
+        `CRITICAL IDENTITY RULE: the person generated is the woman from the FIRST reference image ONLY. ` +
+        `The second reference image shows the garment modeled by a DIFFERENT person — ` +
+        `you MUST NOT copy any physical feature of that different person. ` +
+        `Do NOT copy their tattoos, do NOT copy their skin markings, do NOT copy their hair, ` +
+        `do NOT copy their face, do NOT copy their body proportions, do NOT copy their makeup or accessories. ` +
+        `The woman in the final image has NO tattoos unless they were visible in the first reference image. ` +
+        `If the first reference woman has clean unmarked skin, the final image must also have clean unmarked skin`
       );
     } else {
-      // fallback v2.3 para quando nao ha descricao analisada
       parts.push(
         `She is wearing the clothing item shown in the SECOND reference image. ` +
         `From the second image, use ONLY the garment design, cut, fabric texture and color. ` +
@@ -104,8 +104,8 @@ export default async function handler(req, res) {
       aspect_ratio = '9:16',
       profile_name,
       body_description,
-      face_prompt,            // v2.4
-      product_description,    // v2.7
+      face_prompt,
+      product_description,
       negative_prompt,
     } = req.body;
 
@@ -124,7 +124,7 @@ export default async function handler(req, res) {
 
     const finalNegative = negative_prompt ? sanitizeNegativePrompt(negative_prompt) : null;
 
-    console.log(`[image v2.7] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}`);
+    console.log(`[image v2.7.1] endpoint=${endpoint}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}`);
 
     const body = {
       prompt: finalPrompt,
