@@ -1,17 +1,18 @@
 // Generate back image prompt using frontal image + back product photo via Claude
 //
 // HISTÓRICO:
-// v2.8 — (anterior) sem proteções; prompt vago causava "looking over shoulder",
-//        pose torcida em V02/V03 e anatomia quebrada por sobrecarga do frontal.
-// v2.9 — FIX DE CORPO TORCIDO E ANATOMIA:
-//        Camada A: sanitiza frontalPrompt (remove "looking at camera", etc)
-//        Camada B: system prompt com anatomy-of-back explícito
-//        Camada C: simplicity guard (reduzir elementos do cenário)
-//        Camada D: negative prompt forçado com lista anti-torção
+// v2.8 — (anterior) sem proteções; prompt vago causava "looking over shoulder".
+// v2.9 — 4 camadas: sanitização de frontal, anatomy-of-back, simplicity guard,
+//        negative forçado anti-pose. Resolveu torção mas causou Frankenstein
+//        quando combinado com anchor v3.0 no image.js.
+// v3.1 — SIMPLIFICAÇÃO GERAL:
+//        Projeto legado comprovou que Nano Banana quer prompts CURTOS pra back.
+//        Mudanças: system prompt reduzido a ~30 linhas (era ~50), saiu o template
+//        obrigatório "back fully to camera, head aligned with spine", negative
+//        trocado pra anti-anatomia-ruim (padrão Lígia). Mantida a sanitização
+//        de frontal (camada A) — é útil e barata.
 
 // ─── Camada A: padrões de contaminação frontal ───
-// Removidos ANTES de passar o prompt frontal para o Claude, pra evitar que
-// ele herde a orientação de contato visual no prompt de costas.
 const FRONTAL_CONTAMINATION_PATTERNS = [
   /looking\s+(?:directly\s+|straight\s+|right\s+)?(?:at|into|toward[s]?)\s+(?:the\s+)?camera/gi,
   /looking\s+at\s+(?:the\s+)?viewer/gi,
@@ -42,18 +43,16 @@ function sanitizeFrontalPrompt(prompt) {
     }
   }
 
-  // Limpa sujeira resultante (vírgulas múltiplas, espaços múltiplos, etc)
   cleaned = cleaned
-    .replace(/\s{2,}/g, ' ')                 // espaços duplos → único
-    .replace(/(?:\s*,\s*){2,}/g, ', ')       // vírgulas múltiplas (", ,", ", , ,", etc) → uma só
-    .replace(/\s*,\s*/g, ', ')               // normaliza espaço em torno de vírgula
-    .replace(/\s+\./g, '.')                  // espaço antes de ponto
-    .replace(/,\s*\./g, '.')                 // vírgula antes de ponto
-    .replace(/^[,\s]+/, '')                  // início limpo
-    .replace(/[,\s]+$/, '')                  // fim limpo
+    .replace(/\s{2,}/g, ' ')
+    .replace(/(?:\s*,\s*){2,}/g, ', ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s+\./g, '.')
+    .replace(/,\s*\./g, '.')
+    .replace(/^[,\s]+/, '')
+    .replace(/[,\s]+$/, '')
     .trim();
 
-  // Opção 3 do fallback: passa mesmo quebrado, mas loga warning se ficou ruim
   const integrityRatio = originalLen > 0 ? cleaned.length / originalLen : 1;
   const warning = (integrityRatio < 0.6 || removedCount > 3)
     ? `frontalPrompt heavily sanitized: removed ${removedCount} phrase(s), ${Math.round((1 - integrityRatio) * 100)}% reduction in length`
@@ -62,76 +61,49 @@ function sanitizeFrontalPrompt(prompt) {
   return { cleaned, removedCount, warning };
 }
 
-// ─── Camada D: negative prompt forçado ───
-// Concatenado ao negativo retornado pelo Claude INDEPENDENTE do que ele gerar.
-// Garante que mesmo se o Claude esquecer, essas regras vão pro Nano Banana.
-const FORCED_BACK_NEGATIVE = [
-  'looking over shoulder',
-  'looking back at camera',
-  'head turned to camera',
-  'head turned toward viewer',
-  'face visible',
-  'partial face visible',
-  'profile view',
-  'three-quarter back view',
-  'side profile',
-  'twisted torso',
-  'rotated upper body',
-  'upper body rotation',
-  'contrapposto with head turn',
-  'neck rotation',
-  'twisted spine',
-  'body torsion',
-  'eye contact',
-  'facing camera',
-  'glancing back',
-  'peeking over shoulder',
-  'partial back view',
+// ─── Negative prompt forçado v3.1 ───
+// Projeto legado usa negativos contra ANATOMIA RUIM e QUALIDADE, não contra pose.
+const FORCED_ANATOMY_NEGATIVE = [
+  'slim body', 'skinny', 'thin', 'model body', 'athletic body', 'muscular',
+  'underweight', 'bony', 'flat hips', 'no curves',
+  'wrong hair color', 'wrong hair texture',
+  'barefoot', 'no shoes', 'wrong product design',
+  'sitting', 'seated', 'people in background', 'empty background', 'studio backdrop',
+  'cropped body', 'cut off legs', 'missing feet',
+  'low quality', 'blurry', 'distorted', 'unrealistic',
+  'advertising style', 'fake lighting', 'text overlay', 'watermark', 'logo',
+  'cartoon', 'CGI', 'plastic skin', 'airbrushed skin', 'porcelain skin',
+  'perfectly smooth skin', 'overly polished', 'retouched skin', 'studio lighting',
 ].join(', ');
 
-// ─── Camada B + C: system prompt com anatomy-of-back + simplicity guard ───
-const SYSTEM_PROMPT = `Você é um especialista em prompts de imagem UGC para TikTok Shop, especializado em poses de COSTAS.
+// ─── SYSTEM PROMPT v3.1 — MINIMALISTA ───
+const SYSTEM_PROMPT = `Você é um especialista em prompts de imagem UGC para TikTok Shop.
+Sua tarefa: criar o prompt de COSTAS da mesma cena da imagem frontal aprovada.
 
-CONTEXTO: Recebe imagem frontal já aprovada + prompt frontal já usado. Seu trabalho: criar o prompt da MESMA CENA mas com a pessoa de costas.
+FORMATO DO PROMPT POSITIVO (em inglês, ~4-6 linhas):
+"Woman standing back view wearing the outfit from reference image,
+[calçado visível por trás], [cabelo visto de trás, ex: 'long wavy brown hair falling down the back'],
+[mesmo cenário da imagem frontal — descrição simples, 1-2 elementos principais],
+[mesma iluminação da imagem frontal],
+full body visible head to toe including feet,
+UGC authentic style, realistic, vertical 9:16."
 
-═══ REGRAS ANATÔMICAS DE COSTAS (CRÍTICAS) ═══
+REGRAS:
+- Prompt CURTO e POSITIVO. Nada de "NOT visible", "must not", "do NOT".
+- Cenário simples — se o frontal tem vários elementos acessórios (dust particles,
+  wine glass, plantas, etc), MANTENHA APENAS os 1-2 principais.
+- Cabelo descrito COMO É VISTO POR TRÁS.
+- NÃO descreva a cor da roupa (a imagem de referência faz isso).
+- Mantenha consistência de cenário e iluminação com a frontal.
 
-POSE OBRIGATÓRIA:
-- Corpo 100% virado de costas para a câmera
-- Tronco, ombros e quadris alinhados — ZERO rotação
-- Cabeça alinhada com a coluna — pescoço NÃO torce
-- Nuca totalmente visível — a câmera está ATRÁS do sujeito
-- Nenhuma parte do rosto visível (nem mesmo parcialmente)
-- Sem contato visual, sem olhar sobre o ombro
-- Braços em posição natural relaxada ao lado do corpo
-
-PROIBIDO (NUNCA incluir no positivo):
-- "looking over shoulder" ou "glancing back"
-- "head turned", "partial face visible", "profile view"
-- "three-quarter back" — é BACK, não 3/4
-- Torção de coluna, rotação de pescoço, corpo contorcido
-- Qualquer expressão que sugira contato com a câmera ou visibilidade do rosto
-
-═══ REGRA DE SIMPLICIDADE (SIMPLICITY GUARD) ═══
-
-O prompt de costas deve ser MAIS ENXUTO que o frontal.
-- MANTENHA: cenário principal (1-2 elementos), iluminação, roupa, calçado, cabelo
-- REMOVA: detalhes acessórios (partículas de poeira, copos de vinho, plantas decorativas, objetos menores, texturas específicas de almofada, etc)
-- Motivo: Nano Banana perde anatomia (braços extras, pés torcidos) quando o prompt está sobrecarregado.
-- Regra prática: se o frontal tem >4 elementos ambientais, o de costas pode ter no máximo 2.
-
-═══ CONSISTÊNCIA COM A FRONTAL ═══
-
-- Mesma modelo, mesma roupa, mesmo cenário base, mesma iluminação
-- Cabelo: descrever COMO É VISTO POR TRÁS (ex: "long wavy brown hair falling down the back" em vez de "framing the face")
-- Calçado e acessórios visíveis de costas: manter
-
-═══ FORMATO ═══
-
-- Vertical 9:16, UGC authentic, realistic
-- Full body visible head to toe including feet (anatomicamente correto)
-- Prompt em INGLÊS
-- O campo "positivo" DEVE começar com: "Woman standing with her back fully to the camera, head aligned with spine, nape of neck visible,"
+NEGATIVE PROMPT (em inglês): foque em anatomia ruim e qualidade, NÃO em pose.
+Exemplo: "slim body, skinny, thin, model body, athletic body, muscular, underweight,
+bony, flat hips, no curves, wrong hair color, wrong hair texture, barefoot, no shoes,
+wrong product design, sitting, seated, people in background, empty background,
+studio backdrop, cropped body, cut off legs, missing feet, low quality, blurry,
+distorted, unrealistic, advertising style, fake lighting, text overlay, watermark,
+logo, cartoon, CGI, plastic skin, airbrushed skin, porcelain skin,
+perfectly smooth skin, overly polished, retouched skin, studio lighting"
 
 Retorne APENAS JSON válido, sem backticks, sem markdown:
 {
@@ -154,12 +126,11 @@ export default async function handler(req, res) {
 
     if (!frontalImageUrl) return res.status(400).json({ error: 'frontalImageUrl is required' });
 
-    // ─── CAMADA A: sanitizar frontalPrompt antes de enviar ao Claude ───
     const { cleaned: cleanedFrontal, removedCount, warning } = sanitizeFrontalPrompt(frontalPrompt);
     if (warning) {
-      console.warn(`[generate-back v2.9] ${warning}`);
+      console.warn(`[generate-back v3.1] ${warning}`);
     }
-    console.log(`[generate-back v2.9] frontalPrompt: removed ${removedCount} contaminant phrase(s)`);
+    console.log(`[generate-back v3.1] frontalPrompt: removed ${removedCount} contaminant phrase(s)`);
 
     const userMessage = [
       {
@@ -186,11 +157,11 @@ CAMADAS:
 - Estética: ${camadas?.estetica || 'N/A'}
 
 INSTRUÇÕES FINAIS:
-1. Comece o "positivo" OBRIGATORIAMENTE com: "Woman standing with her back fully to the camera, head aligned with spine, nape of neck visible,"
-2. Descreva o cabelo COMO É VISTO DE TRÁS
-3. Aplique o SIMPLICITY GUARD — remova detalhes acessórios do cenário
-4. O prompt de costas DEVE ser MAIS ENXUTO que o frontal
-5. No "negativo", inclua pelo menos: "looking over shoulder, head turned, twisted torso, face visible, profile view"
+1. Comece o "positivo" com: "Woman standing back view wearing the outfit from reference image,"
+2. Descreva o cabelo COMO É VISTO DE TRÁS (ex: "long wavy brown hair falling down the back")
+3. Cenário simples — 1 ou 2 elementos principais, sem acessórios excessivos
+4. Mantenha consistência de cenário e iluminação com a frontal
+5. NÃO descreva a cor da roupa (imagem de referência faz isso)
 
 APENAS JSON.`
       }
@@ -216,33 +187,32 @@ APENAS JSON.`
     const data = await response.json();
 
     if (data.error) {
-      console.error('[generate-back v2.9] Claude error:', data.error);
+      console.error('[generate-back v3.1] Claude error:', data.error);
       return res.status(500).json({ error: data.error.message || JSON.stringify(data.error) });
     }
 
     const text = data.content?.map(i => i.text || '').join('') || '';
 
-    // Parse JSON response
     let parsed;
     try {
       parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
     } catch (parseErr) {
-      console.error('[generate-back v2.9] JSON parse error:', parseErr, 'Raw text:', text.substring(0, 500));
+      console.error('[generate-back v3.1] JSON parse error:', parseErr, 'Raw text:', text.substring(0, 500));
       return res.status(500).json({ error: 'Failed to parse Claude response', raw: text.substring(0, 500) });
     }
 
-    // ─── CAMADA D: injeta negative forçado independente do que Claude retornou ───
+    // ─── v3.1: injeta negative de ANATOMIA (não de pose) ───
     if (parsed.negativo && typeof parsed.negativo === 'string' && parsed.negativo.trim()) {
-      parsed.negativo = `${parsed.negativo.trim()}, ${FORCED_BACK_NEGATIVE}`;
+      parsed.negativo = `${parsed.negativo.trim()}, ${FORCED_ANATOMY_NEGATIVE}`;
     } else {
-      parsed.negativo = FORCED_BACK_NEGATIVE;
+      parsed.negativo = FORCED_ANATOMY_NEGATIVE;
     }
 
-    console.log(`[generate-back v2.9] OK — positivoLen=${(parsed.positivo||'').length}, negativoLen=${parsed.negativo.length}`);
+    console.log(`[generate-back v3.1] OK — positivoLen=${(parsed.positivo||'').length}, negativoLen=${parsed.negativo.length}`);
 
     return res.status(200).json(parsed);
   } catch (error) {
-    console.error('[generate-back v2.9] error:', error);
+    console.error('[generate-back v3.1] error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
