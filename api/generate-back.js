@@ -13,6 +13,8 @@
 //        de frontal (camada A) — é útil e barata.
 
 // ─── Camada A: padrões de contaminação frontal ───
+// Removidos ANTES de passar o prompt frontal para o Claude, pra evitar que
+// ele herde a orientação de contato visual no prompt de costas.
 const FRONTAL_CONTAMINATION_PATTERNS = [
   /looking\s+(?:directly\s+|straight\s+|right\s+)?(?:at|into|toward[s]?)\s+(?:the\s+)?camera/gi,
   /looking\s+at\s+(?:the\s+)?viewer/gi,
@@ -43,16 +45,18 @@ function sanitizeFrontalPrompt(prompt) {
     }
   }
 
+  // Limpa sujeira resultante (vírgulas múltiplas, espaços múltiplos, etc)
   cleaned = cleaned
-    .replace(/\s{2,}/g, ' ')
-    .replace(/(?:\s*,\s*){2,}/g, ', ')
-    .replace(/\s*,\s*/g, ', ')
-    .replace(/\s+\./g, '.')
-    .replace(/,\s*\./g, '.')
-    .replace(/^[,\s]+/, '')
-    .replace(/[,\s]+$/, '')
+    .replace(/\s{2,}/g, ' ')                 // espaços duplos → único
+    .replace(/(?:\s*,\s*){2,}/g, ', ')       // vírgulas múltiplas (", ,", ", , ,", etc) → uma só
+    .replace(/\s*,\s*/g, ', ')               // normaliza espaço em torno de vírgula
+    .replace(/\s+\./g, '.')                  // espaço antes de ponto
+    .replace(/,\s*\./g, '.')                 // vírgula antes de ponto
+    .replace(/^[,\s]+/, '')                  // início limpo
+    .replace(/[,\s]+$/, '')                  // fim limpo
     .trim();
 
+  // Opção 3 do fallback: passa mesmo quebrado, mas loga warning se ficou ruim
   const integrityRatio = originalLen > 0 ? cleaned.length / originalLen : 1;
   const warning = (integrityRatio < 0.6 || removedCount > 3)
     ? `frontalPrompt heavily sanitized: removed ${removedCount} phrase(s), ${Math.round((1 - integrityRatio) * 100)}% reduction in length`
@@ -63,6 +67,8 @@ function sanitizeFrontalPrompt(prompt) {
 
 // ─── Negative prompt forçado v3.1 ───
 // Projeto legado usa negativos contra ANATOMIA RUIM e QUALIDADE, não contra pose.
+// "looking over shoulder" NÃO é mais banido — quando é única instrução clara, o
+// modelo lida bem. Banimos apenas artefatos ruins de imagem.
 const FORCED_ANATOMY_NEGATIVE = [
   'slim body', 'skinny', 'thin', 'model body', 'athletic body', 'muscular',
   'underweight', 'bony', 'flat hips', 'no curves',
@@ -77,6 +83,13 @@ const FORCED_ANATOMY_NEGATIVE = [
 ].join(', ');
 
 // ─── SYSTEM PROMPT v3.1 — MINIMALISTA ───
+// Aprendizado: system prompt v2.9 tinha ~40 linhas de regras ("pose OBRIGATÓRIA",
+// "PROIBIDO", "SIMPLICITY GUARD"). Resultado no Nano Banana: Frankenstein
+// (tronco frontal + cabeça de costas) porque as negações acumuladas conflitavam
+// com a imagem frontal de referência. Projeto legado comprovou que Nano Banana
+// quer prompts CURTOS e POSITIVOS pra back view.
+// Agora Claude gera um prompt enxuto no padrão legado e confiamos que image.js
+// adiciona a anchor de identidade.
 const SYSTEM_PROMPT = `Você é um especialista em prompts de imagem UGC para TikTok Shop.
 Sua tarefa: criar o prompt de COSTAS da mesma cena da imagem frontal aprovada.
 
@@ -126,6 +139,7 @@ export default async function handler(req, res) {
 
     if (!frontalImageUrl) return res.status(400).json({ error: 'frontalImageUrl is required' });
 
+    // ─── CAMADA A: sanitizar frontalPrompt antes de enviar ao Claude ───
     const { cleaned: cleanedFrontal, removedCount, warning } = sanitizeFrontalPrompt(frontalPrompt);
     if (warning) {
       console.warn(`[generate-back v3.1] ${warning}`);
@@ -193,6 +207,7 @@ APENAS JSON.`
 
     const text = data.content?.map(i => i.text || '').join('') || '';
 
+    // Parse JSON response
     let parsed;
     try {
       parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
