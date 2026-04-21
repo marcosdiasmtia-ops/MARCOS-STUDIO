@@ -1,4 +1,4 @@
-// api/analyze-identity.js (v3.0 — dual-photo analysis + bias-neutral prompt)
+// api/analyze-identity.js (v3.1 — age-neutral + dual-photo + bias-neutral)
 // Analisa 1 OU 2 fotos da influencer via Claude Vision:
 //   - faceBase64  (obrigatória): foto do rosto pra gerar facePrompt detalhado
 //   - bodyBase64  (opcional): foto do corpo inteiro pra gerar bodyDescription
@@ -6,8 +6,8 @@
 // Se só faceBase64 for enviada: fallback pra comportamento v2.7 (analisa ambos
 // na mesma foto, bodyDescription pode vir vazio se só aparecer rosto).
 //
-// CHANGELOG v2.6.1 → v3.0:
-// v2.7 (anti-viés):
+// CHANGELOG v2.6.1 → v3.1:
+// v2.7 (anti-viés racial/corporal):
 //   - Removidos exemplos enviesados (honey blonde / Northern European / slim elongated)
 //   - Adicionadas RULE 0, 0B, 0C (anti-bias + Fitzpatrick scale)
 //   - 4 exemplos DIVERSOS (Latin/European/Asian/African)
@@ -19,6 +19,14 @@
 //   - Mantém retrocompat: aceita base64 antigo (1 foto)
 //   - Envia 2 imagens pro Claude numa única chamada
 //   - Prompt instrui Claude qual imagem analisa qual parte
+// v3.1 (age-neutral — FIX Bug 1 de envelhecimento):
+//   - Adicionada RULE 0D (AGE NEUTRALITY) no bloco de anti-bias
+//   - Exemplo venenoso "mature adult features with subtle smile lines"
+//     substituído por 3 exemplos diversos de faixas etárias (23-27 / 28-32 / 33-38)
+//   - Instrução explícita: "default to youth when uncertain"
+//   - Self-check expandido: pegar "mature" aplicado a pele lisa
+//   - SELF-CHECK TEST com nova regra anti-aging
+//   - instructionText cita RULE 0D
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -53,7 +61,7 @@ export default async function handler(req, res) {
 
     const hasTwoPhotos = !!finalBodyBase64;
 
-    // Prompt anti-viés (v2.7) + instruções de dual-photo (v3.0)
+    // Prompt anti-viés (v2.7) + dual-photo (v3.0) + age-neutral (v3.1)
     const systemPrompt = `You are a forensic visual analyst for AI image generation.
 
 MISSION: look at the photo(s) with FORENSIC precision and generate a text description that allows recreating THIS SPECIFIC PERSON — not a similar person, THE person in the photo.
@@ -119,6 +127,39 @@ Classify skin on the Fitzpatrick scale I-VI (this removes regional bias):
 Include the TYPE in your description. Example: "light skin Fitzpatrick type III
 with warm neutral undertones" — this is precise and unbiased.
 
+RULE 0D — AGE NEUTRALITY (mandatory):
+AI image generation models have DOCUMENTED BIAS toward aging the subject 5-10
+years beyond what the photo shows. Aging-associated words in the prompt get
+AMPLIFIED into wrinkles, tired eyes, and weathered skin in the final image.
+
+You MUST fight this bias actively:
+
+1. ESTIMATE the YOUNGEST age that is plausibly consistent with what you see.
+   When in doubt between two ranges, CHOOSE THE YOUNGER ONE.
+
+2. AVOID these aging-amplifier words — they poison downstream image models:
+   ✗ "mature facial structure"
+   ✗ "mature adult features"
+   ✗ "expression lines"
+   ✗ "smile lines around eyes"
+   ✗ "subtle wrinkles"
+   ✗ "weathered skin"
+   ✗ "outdoor lifestyle" (read as sun damage by image models)
+   ✗ "aged appearance"
+   ✗ "seasoned" / "experienced look"
+
+3. USE these positive descriptors when skin appears smooth and clear:
+   ✓ "smooth youthful facial structure"
+   ✓ "fresh clear skin with minimal lines"
+   ✓ "natural freshness"
+   ✓ "soft youthful features"
+   ✓ "even unblemished skin tone"
+
+4. If the person GENUINELY has deep expression lines or visible aging signs,
+   mention them ONCE and briefly — never as a defining feature, never with
+   intensifying adjectives. Example (only when truly visible): "fine lines
+   near outer eye corners" — NOT "deep expression lines and mature features".
+
 ══════════════════════════════════════════════
 CRITICAL RULES for facePrompt
 ══════════════════════════════════════════════
@@ -155,8 +196,19 @@ CRITICAL RULES for facePrompt
    If no distinguishing feature visible, write: "no visible piercings, tattoos,
    moles or freckles, clean even skin".
 
-4. PRECISE AGE in narrow range — "woman aged 32-38, mature adult features with
-   subtle smile lines around eyes" — never use just "young" or "adult".
+4. PRECISE AGE in narrow range — estimate the YOUNGEST plausible range:
+
+   DIVERSE EXAMPLES (pick the one that matches what you actually see, DEFAULT
+   TO THE YOUNGER OPTION when uncertain):
+   - "woman aged 22-26, smooth youthful facial structure, fresh clear skin"
+   - "woman aged 27-31, soft features with even unblemished skin tone"
+   - "woman aged 32-36, defined adult features with naturally smooth skin"
+   - "woman aged 37-42, mature features only if deep lines are genuinely visible"
+
+   REMINDER (from RULE 0D): AI image models AMPLIFY age. When skin looks
+   smooth in the photo, do NOT add "mature" or "expression lines" — the
+   final image will show wrinkles you never saw. Never use just "young"
+   or "adult".
 
 5. MANDATORY ORDER of description:
    a) Face shape + jawline + cheekbones (soft / defined / angular)
@@ -167,7 +219,7 @@ CRITICAL RULES for facePrompt
    f) Lips (fullness + shape + natural color)
    g) Hair (BASE COLOR detailed + highlights if any + texture + length)
    h) Distinguishing features (item 3)
-   i) Precise age estimate
+   i) Precise age estimate (per item 4 — youngest plausible range)
    j) Makeup status (natural / light / heavy)
 
 6. HAIR DESCRIPTION — SEPARATE BASE FROM HIGHLIGHTS:
@@ -229,6 +281,9 @@ Before finalizing, ask yourself:
 ✓ Did I separate hair BASE color from HIGHLIGHTS (if any)?
 ✓ Did I include Fitzpatrick skin type?
 ✓ Did I avoid defaulting to "European/blonde/slim" stereotype?
+✓ Did I avoid adding aging words ("mature", "expression lines", "weathered",
+  "outdoor lifestyle") when the skin actually looks smooth and fresh?
+✓ Did I estimate the YOUNGEST plausible age range (per RULE 0D)?
 ✓ Are my cross-checked features (skin + eyes + hair + bone structure)
   consistent with a plausible ancestry?
 ${hasTwoPhotos ? `✓ Did I use IMAGE 1 only for face and IMAGE 2 only for body?
@@ -238,6 +293,7 @@ SELF-CHECK TEST:
 If your description would fit "any 30-year-old woman with light hair" — REWRITE.
 If your description defaults to "European" features for an ambiguous face — REWRITE.
 If your description assumes "slim" body for a non-visible torso — REMOVE body field.
+If your description adds "mature" or "expression lines" to smooth young-looking skin — REWRITE.
 
 ══════════════════════════════════════════════
 FORMAT
@@ -273,8 +329,8 @@ FORMAT
 
     // Texto da instrução (contextual)
     const instructionText = hasTwoPhotos
-      ? 'You received 2 images: IMAGE 1 is the face/portrait, IMAGE 2 is the full body. Analyze each image for its designated purpose per the rules. Prioritize SPECIFICITY, DISTINGUISHING FEATURES, and ANTI-BIAS rules (RULE 0, 0B, 0C). Describe EXACTLY what you see — do not default to European/blonde/slim stereotype. Return ONLY the JSON.'
-      : 'Analyze this photo with forensic precision per the rules. Prioritize SPECIFICITY, DISTINGUISHING FEATURES, and ANTI-BIAS rules (RULE 0, 0B, 0C). Describe EXACTLY what you see — do not default to European/blonde/slim stereotype. Return ONLY the JSON.';
+      ? 'You received 2 images: IMAGE 1 is the face/portrait, IMAGE 2 is the full body. Analyze each image for its designated purpose per the rules. Prioritize SPECIFICITY, DISTINGUISHING FEATURES, and ANTI-BIAS rules (RULE 0, 0B, 0C, 0D). Describe EXACTLY what you see — do not default to European/blonde/slim stereotype AND do not add aging words (mature/expression lines/weathered) when skin is actually smooth. Estimate the YOUNGEST plausible age. Return ONLY the JSON.'
+      : 'Analyze this photo with forensic precision per the rules. Prioritize SPECIFICITY, DISTINGUISHING FEATURES, and ANTI-BIAS rules (RULE 0, 0B, 0C, 0D). Describe EXACTLY what you see — do not default to European/blonde/slim stereotype AND do not add aging words (mature/expression lines/weathered) when skin is actually smooth. Estimate the YOUNGEST plausible age. Return ONLY the JSON.';
 
     userContent.push({
       type: 'text',
@@ -305,7 +361,7 @@ FORMAT
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`[analyze-identity v3.0] Anthropic error ${response.status}:`, errText);
+      console.error(`[analyze-identity v3.1] Anthropic error ${response.status}:`, errText);
       return res.status(response.status).json({
         error: `Anthropic error: ${response.status}`,
         details: errText.substring(0, 500)
@@ -320,21 +376,21 @@ FORMAT
     try {
       parsed = JSON.parse(clean);
     } catch (e) {
-      console.error('[analyze-identity v3.0] JSON parse error:', e.message, 'Raw:', clean.substring(0, 300));
+      console.error('[analyze-identity v3.1] JSON parse error:', e.message, 'Raw:', clean.substring(0, 300));
       return res.status(500).json({
         error: 'Failed to parse Claude response as JSON',
         raw: clean.substring(0, 500)
       });
     }
 
-    console.log(`[analyze-identity v3.0] OK (${hasTwoPhotos ? 'dual-photo' : 'single-photo'}): face=${(parsed.facePrompt||'').length}ch, body=${(parsed.bodyDescription||'').length}ch`);
+    console.log(`[analyze-identity v3.1] OK (${hasTwoPhotos ? 'dual-photo' : 'single-photo'}): face=${(parsed.facePrompt||'').length}ch, body=${(parsed.bodyDescription||'').length}ch`);
 
     return res.status(200).json({
       facePrompt: parsed.facePrompt || '',
       bodyDescription: parsed.bodyDescription || ''
     });
   } catch (error) {
-    console.error('[analyze-identity v3.0] Error:', error);
+    console.error('[analyze-identity v3.1] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
