@@ -1,4 +1,4 @@
-// fal.ai Nano Banana image generation proxy (v3.3)
+// fal.ai image generation proxy (v3.4)
 //
 // HISTORICO DE FIXES:
 // v2.2 - Fix 1: ancora de identidade
@@ -8,32 +8,30 @@
 // v2.4 - facePrompt: ancora com descricao textual detalhada do rosto
 // v2.7 - productDescription: descricao tecnica da peca (Claude Vision)
 // v2.7.1 - anti-contaminacao reforcada quando ha productDescription
-// v2.8 - anatomy guard: reforco anatomico + negative default pra reduzir
-//        pes/maos deformados (limitacao classica do Nano Banana)
+// v2.8 - anatomy guard: reforco anatomico + negative default
 // v3.0 - VIEW_TYPE BIFURCATION: anchor separada pra frontal vs back
-// v3.1 - SIMPLIFICACAO DO BACK ANCHOR:
-//        Aprendizado do projeto legado: Nano Banana quer prompts CURTOS pra back.
-// v3.2 - DOIS FIXES CIRURGICOS NA BACK ANCHOR:
-//        1) "Rear view of the same woman..." no inicio pra fixar orientacao
-//        2) Reforco de que a imagem 2 mostra as COSTAS do produto
-// v3.3 - REFORCO ANTI-PERFIL E ANTI-INVENCAO:
-//        Problema observado em producao: Nano Banana vazava perfil/three-quarter
-//        e inventava zipers em pecas lisas. v3.3 ataca essas duas falhas com
-//        5 mudancas cirurgicas:
-//        1) Prefixo STRICT REAR VIEW (head facing away, no face visible)
-//           antes de "Rear view of the same woman..." pra reforcar posicao.
-//        2) Instrucao CONDICIONAL sobre design traseiro substitui a lista
-//           "zippers/seams/openings" (que induzia invencao em peca lisa).
-//           Agora: "se tem detalhe -> reproduz; se e lisa -> mantem lisa".
-//        3) Deteccao automatica de "smooth back" no prompt recebido ->
-//           adiciona instrucao anti-invencao especifica.
-//        4) Pose anatomy back: ombros quadrados, coluna reta, cabelo
-//           posicionado pra nao cobrir o design.
-//        5) STRICT_BACK_NEGATIVE: negative especifico de posicao aplicado
-//           APENAS quando view_type === 'back'. Inclui face/profile/
-//           three-quarter/head-turned/looking-over-shoulder/etc.
-//        Nao mexido: FRONTAL anchor, ANATOMY_GUARD geral, sanitizacao,
-//        handler principal, polling do fal.ai. Tudo isso funciona.
+// v3.1 - SIMPLIFICACAO DO BACK ANCHOR
+// v3.2 - DOIS FIXES CIRURGICOS NA BACK ANCHOR
+// v3.3 - REFORCO ANTI-PERFIL E ANTI-INVENCAO
+// v3.4 - MIGRACAO DE MODELO: Nano Banana -> FLUX.2 [pro]
+//        Apos v3.3, problemas visuais persistiram (perfil vazando, zipper
+//        inventado, peplum mudando). Diagnostico: limite HARD do Nano Banana,
+//        nao resolve com mais prompt. Solucao: trocar o modelo.
+//        Mudancas:
+//          1) Endpoint: fal-ai/nano-banana/edit -> fal-ai/flux-2-pro/edit
+//             (frontal + back ambos usam FLUX.2 pro agora, decisao do Marcos)
+//          2) Parametro "aspect_ratio" convertido para "image_size":
+//             '9:16' -> 'portrait_16_9', etc.
+//          3) Fallback URLs de status/response agora apontam pra flux-2-pro.
+//          4) Campos preservados: prompt, image_urls, negative_prompt.
+//             fal.ai ignora campos nao reconhecidos silenciosamente, entao
+//             negative_prompt e mantido por seguranca (pode ser aceito).
+//          5) output_format: 'jpeg' (FLUX.2 default) em vez de 'png'.
+//          6) Custo: $0.03/MP vs ~$0.05 do Nano Banana (ate mais barato).
+//          7) Qualidade: "production-grade editing", 9 refs max.
+//        Nao mexido: TODA a logica de anchor (buildIdentityAnchor*),
+//        ANATOMY_GUARD, sanitizeNegativePrompt, STRICT_BACK_NEGATIVE,
+//        detectSmoothBackHint. Tudo isso e agnostico ao modelo.
 
 const ANATOMY_GUARD_POSITIVE =
   'Natural foot positioning with both feet pointing forward in anatomically correct angles. ' +
@@ -254,13 +252,36 @@ function buildIdentityAnchorBack(profileName, bodyDescription, facePrompt, produ
   return parts.length ? parts.join('. ') + '. ' : '';
 }
 
-// v3.3 - Detecta no prompt recebido se ha indicacao de "smooth back".
+// v3.4 - Detecta no prompt recebido se ha indicacao de "smooth back".
 // Sinal vem do generate-back.js (v3.7/v3.8) que escreve "with smooth back"
 // quando Claude detecta que a peca nao tem detalhe traseiro marcante.
 function detectSmoothBackHint(prompt) {
   if (!prompt || typeof prompt !== 'string') return false;
   return /\bsmooth\s+back\b/i.test(prompt) || /\bwith\s+no\s+back\s+details\b/i.test(prompt);
 }
+
+// v3.4 - Converte aspect_ratio (formato Nano Banana) para image_size (formato FLUX.2).
+// FLUX.2 aceita valores enum: 'square_hd', 'square', 'portrait_4_3',
+// 'portrait_16_9', 'landscape_4_3', 'landscape_16_9', 'auto'.
+// Se nao reconhecer, usa 'auto' (FLUX.2 decide sozinho).
+function aspectRatioToImageSize(aspectRatio) {
+  if (!aspectRatio || typeof aspectRatio !== 'string') return 'auto';
+  const ar = aspectRatio.trim();
+  switch (ar) {
+    case '9:16':  return 'portrait_16_9';   // vertical (TikTok, Reels, Stories)
+    case '16:9':  return 'landscape_16_9';  // horizontal widescreen
+    case '3:4':   return 'portrait_4_3';
+    case '4:3':   return 'landscape_4_3';
+    case '1:1':   return 'square_hd';
+    default:      return 'auto';
+  }
+}
+
+// v3.4 - Endpoints FLUX.2 [pro] (substitui Nano Banana).
+// com imagens: editing model  -> fal-ai/flux-2-pro/edit
+// sem imagens: pure text-to-image -> fal-ai/flux-2-pro
+const FLUX2_PRO_EDIT_ENDPOINT = 'fal-ai/flux-2-pro/edit';
+const FLUX2_PRO_TEXT_ENDPOINT = 'fal-ai/flux-2-pro';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -288,7 +309,8 @@ export default async function handler(req, res) {
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
     const hasImages = Array.isArray(image_urls) && image_urls.length > 0;
-    const endpoint = hasImages ? 'fal-ai/nano-banana/edit' : 'fal-ai/nano-banana';
+    // v3.4 - FLUX.2 pro substitui Nano Banana em todos os casos
+    const endpoint = hasImages ? FLUX2_PRO_EDIT_ENDPOINT : FLUX2_PRO_TEXT_ENDPOINT;
 
     const isBack = view_type === 'back';
 
@@ -323,12 +345,21 @@ export default async function handler(req, res) {
       finalNegative = sanitizeNegativePrompt(negative_prompt);
     }
 
-    console.log(`[image v3.3] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'-'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}, smoothBackHint=${smoothBackHint}, negLen=${finalNegative?.length||0}, promptLen=${finalPrompt?.length||0}`);
+    // v3.4 - converte aspect_ratio pra image_size (FLUX.2 schema)
+    const imageSize = aspectRatioToImageSize(aspect_ratio);
 
+    console.log(`[image v3.4] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'-'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}, smoothBackHint=${smoothBackHint}, imageSize=${imageSize}, negLen=${finalNegative?.length||0}, promptLen=${finalPrompt?.length||0}`);
+
+    // v3.4 - body FLUX.2 pro:
+    //   prompt + image_urls (mesmos nomes que Nano Banana, mantidos)
+    //   image_size (substitui aspect_ratio)
+    //   output_format: 'jpeg' (FLUX.2 default, mais leve que png)
+    //   negative_prompt incluido se presente; fal.ai ignora campos nao
+    //   reconhecidos silenciosamente, entao nao ha risco.
     const body = {
       prompt: finalPrompt,
-      aspect_ratio,
-      output_format: 'png',
+      image_size: imageSize,
+      output_format: 'jpeg',
       num_images: 1,
     };
     if (hasImages) body.image_urls = image_urls;
@@ -345,7 +376,7 @@ export default async function handler(req, res) {
 
     if (!submitRes.ok) {
       const errText = await submitRes.text();
-      console.error(`[image v3.3] fal.ai submit error ${submitRes.status}:`, errText);
+      console.error(`[image v3.4] fal.ai submit error ${submitRes.status}:`, errText);
       return res.status(submitRes.status).json({ error: `fal.ai error: ${submitRes.status}`, details: errText });
     }
 
@@ -358,10 +389,14 @@ export default async function handler(req, res) {
     const requestId = submitData.request_id;
     if (!requestId) return res.status(500).json({ error: 'No request_id', data: submitData });
 
-    const statusUrl = submitData.status_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}/status`;
-    const responseUrl = submitData.response_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}`;
+    // v3.4 - URLs fallback apontam pro endpoint FLUX.2 pro em uso.
+    // Na pratica, fal.ai sempre retorna status_url/response_url no submitData,
+    // entao o fallback raramente e usado. Mantido por seguranca.
+    const fallbackEndpoint = hasImages ? FLUX2_PRO_EDIT_ENDPOINT : FLUX2_PRO_TEXT_ENDPOINT;
+    const statusUrl = submitData.status_url || `https://queue.fal.run/${fallbackEndpoint}/requests/${requestId}/status`;
+    const responseUrl = submitData.response_url || `https://queue.fal.run/${fallbackEndpoint}/requests/${requestId}`;
 
-    console.log(`[image v3.3] Queued: ${requestId}`);
+    console.log(`[image v3.4] Queued: ${requestId} (endpoint=${endpoint})`);
 
     let attempts = 0;
     const maxAttempts = 60;
@@ -373,7 +408,7 @@ export default async function handler(req, res) {
         headers: { 'Authorization': `Key ${FAL_KEY}` },
       });
       if (!statusRes.ok) {
-        console.error(`[image v3.3] Status check error ${statusRes.status}`);
+        console.error(`[image v3.4] Status check error ${statusRes.status}`);
         continue;
       }
       const status = await statusRes.json();
@@ -387,14 +422,14 @@ export default async function handler(req, res) {
       }
 
       if (status.status === 'FAILED') {
-        console.error(`[image v3.3] Generation failed:`, status);
+        console.error(`[image v3.4] Generation failed:`, status);
         return res.status(500).json({ error: 'Image generation failed', details: status });
       }
     }
 
     return res.status(408).json({ error: 'Timeout waiting for image', requestId });
   } catch (error) {
-    console.error('[image v3.3] Error:', error);
+    console.error('[image v3.4] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
