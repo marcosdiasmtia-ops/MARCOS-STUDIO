@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v2.4 — facePrompt pipeline)
+// API helper functions for all backend calls (v3.0 — dual-photo analyzeIdentity + facePrompt pipeline)
 
 export async function callClaude(system, userMessage) {
   const res = await fetch('/api/generate', {
@@ -45,13 +45,42 @@ export async function uploadToFal(base64, mimeType, fileName) {
   return data.url;
 }
 
-// v2.4: analisa a foto da influencer via Claude Vision e devolve
-// { facePrompt, bodyDescription } pra preencher o formulário automaticamente
-export async function analyzeIdentity(base64, mimeType) {
+// v3.0: analisa 1 OU 2 fotos da influencer via Claude Vision e devolve
+// { facePrompt, bodyDescription } pra preencher o formulário automaticamente.
+//
+// ASSINATURA v3.0 (nova — recomendada):
+//   analyzeIdentity({ faceBase64, faceMimeType, bodyBase64?, bodyMimeType? })
+//     → faceBase64 (obrigatória): foto do rosto pra facePrompt
+//     → bodyBase64 (opcional): foto de corpo inteiro pra bodyDescription
+//
+// ASSINATURA v2.4 (legada — ainda funciona):
+//   analyzeIdentity(base64, mimeType)
+//     → analisa ambos na mesma foto (fallback)
+//
+// Isso mantém retrocompat: código antigo que chama com 2 argumentos continua funcionando.
+export async function analyzeIdentity(arg1, arg2) {
+  // Detecta se é chamada v3.0 (objeto) ou v2.4 (2 argumentos)
+  let payload;
+  if (typeof arg1 === 'object' && arg1 !== null && !(arg1 instanceof Blob)) {
+    // v3.0: { faceBase64, faceMimeType, bodyBase64, bodyMimeType }
+    payload = {
+      faceBase64: arg1.faceBase64,
+      faceMimeType: arg1.faceMimeType || 'image/jpeg',
+      bodyBase64: arg1.bodyBase64 || null,
+      bodyMimeType: arg1.bodyMimeType || 'image/jpeg',
+    };
+  } else {
+    // v2.4 legado: (base64, mimeType) → manda como faceBase64
+    payload = {
+      faceBase64: arg1,
+      faceMimeType: arg2 || 'image/jpeg',
+    };
+  }
+
   const res = await fetch('/api/analyze-identity', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ base64, mimeType })
+    body: JSON.stringify(payload)
   });
   const text = await res.text();
   let data;
