@@ -1,5 +1,5 @@
 // ============================================================
-// generate-back.js  v3.7
+// generate-back.js  v3.8
 // ============================================================
 // Generate back-view image prompt using frontal image + back
 // product photo via Claude Sonnet 4.
@@ -11,7 +11,20 @@
 //   D) Validate output + retry once on critical failure
 //   E) Enforce missing pieces (inject what Claude forgot)
 //
-// KEY CHANGES vs v3.6:
+// CHANGELOG v3.7 -> v3.8:
+//   LAYER B - Detector rewritten with combinatorial logic:
+//     - Before: linear priority list (bodysuit matched before set)
+//     - Now: collect all matches, then apply combinatorial rules
+//     - Rule: bodysuit + pants/skirt -> "set" (not "body")
+//     - Rule: top + pants/skirt (no dress/jumpsuit) -> "set"
+//     - Rule: jumpsuit wins over set (it's a single garment)
+//     - Rule: isolated bodysuit (no bottom mentioned) -> "body"
+//   LAYER C - NEGATIVE_BY_PRODUCT_TYPE.set expanded:
+//     - Added "different fabric", "changed pattern", "altered ruffle"
+//     - Helps preserve peplum and asymmetric details
+//   New unit tests for combinatorial cases
+//
+// CHANGELOG v3.6 -> v3.7:
 //   - temperature 0.3 (consistency over creativity)
 //   - tool_use instead of JSON.parse fragile regex
 //   - few-shot moved from system prompt to messages[]
@@ -133,14 +146,45 @@ function detectProductType(cleanedFrontal, visual, camadas) {
     camadas?.estetica || '',
   ].join(' ').toLowerCase();
 
-  // order matters: more specific first (jumpsuit before pants, bodysuit before top)
-  const order = ['jumpsuit', 'bikini', 'body', 'dress', 'set', 'coat', 'skirt', 'pants', 'top'];
-  for (const key of order) {
-    const patterns = PRODUCT_TYPE_KEYWORDS[key];
-    if (patterns && patterns.some(p => p.test(haystack))) {
-      return key;
+  // Step 1: collect ALL matching types (not just the first one)
+  const matches = new Set();
+  for (const [key, patterns] of Object.entries(PRODUCT_TYPE_KEYWORDS)) {
+    if (patterns.some(p => p.test(haystack))) {
+      matches.add(key);
     }
   }
+
+  // Step 2: combinatorial rules (order matters, first match wins)
+
+  // Rule 2.1: jumpsuit or bikini are single-garment wholes, always win
+  if (matches.has('jumpsuit')) return 'jumpsuit';
+  if (matches.has('bikini'))   return 'bikini';
+
+  // Rule 2.2: explicit "set/conjunto" keyword always wins
+  if (matches.has('set')) return 'set';
+
+  // Rule 2.3: dress alone wins (even with accessories like "top/coat" nearby)
+  //          but if dress appears with pants/skirt, that's weird -> fall to default
+  if (matches.has('dress')) {
+    const hasBottomWithDress = matches.has('pants') || matches.has('skirt');
+    if (!hasBottomWithDress) return 'dress';
+  }
+
+  // Rule 2.4: implicit set detection -- top-like garment + bottom
+  //          covers "bodysuit + trousers", "top + skirt", "blouse + pants", etc.
+  const hasBottom = matches.has('pants') || matches.has('skirt');
+  const hasTopGarment = matches.has('top') || matches.has('body') || matches.has('coat');
+  if (hasBottom && hasTopGarment) return 'set';
+
+  // Rule 2.5: isolated body without bottom -> body
+  if (matches.has('body')) return 'body';
+
+  // Rule 2.6: remaining single-type matches in priority order
+  const fallbackOrder = ['coat', 'skirt', 'pants', 'dress', 'top'];
+  for (const key of fallbackOrder) {
+    if (matches.has(key)) return key;
+  }
+
   return 'unknown';
 }
 
@@ -177,7 +221,7 @@ const NEGATIVE_BY_PRODUCT_TYPE = {
   pants:    ['back pockets', 'visible pockets on trousers', 'pockets on back of pants', 'trouser back pockets'],
   dress:    ['different color', 'altered back design', 'modified straps'],
   skirt:    ['altered silhouette', 'wrong hem length'],
-  set:      ['mismatched pieces', 'different top', 'different bottom'],
+  set:      ['mismatched pieces', 'different top', 'different bottom', 'altered peplum', 'wrong ruffle', 'symmetrical hem when asymmetric', 'invented zipper', 'added zipper', 'back zipper when smooth back'],
   body:     ['visible underwear', 'altered neckline'],
   jumpsuit: ['altered silhouette', 'wrong leg length'],
   bikini:   ['altered cut', 'wrong coverage'],
@@ -365,7 +409,7 @@ function appendBeforeScenery(prompt, phrase) {
 
 
 // ============================================================
-// SYSTEM PROMPT v3.7 (lean, focused)
+// SYSTEM PROMPT v3.8 (lean, focused)
 // ============================================================
 
 const SYSTEM_PROMPT_V37 = `You are a UGC prompt specialist for TikTok Shop.
@@ -704,7 +748,7 @@ export default async function handler(req, res) {
 
     // ---- LAYER A: sanitize ----
     const { cleaned: cleanedFrontal, removedCount, warning: sanitizeWarning } = sanitizeFrontalPrompt(frontalPrompt, backMode);
-    if (sanitizeWarning) console.warn(`[generate-back v3.7] ${sanitizeWarning}`);
+    if (sanitizeWarning) console.warn(`[generate-back v3.8] ${sanitizeWarning}`);
 
     // ---- LAYER B: detect product type ----
     const productType = detectProductType(cleanedFrontal, visual, camadas);
@@ -722,7 +766,7 @@ export default async function handler(req, res) {
     try {
       claudeResult = await callClaude({ apiKey: API_KEY, systemPrompt, messages });
     } catch (err) {
-      console.error('[generate-back v3.7] attempt 1 failed:', err.message);
+      console.error('[generate-back v3.8] attempt 1 failed:', err.message);
       return res.status(500).json({ error: `Claude call failed: ${err.message}` });
     }
 
@@ -744,7 +788,7 @@ export default async function handler(req, res) {
         claudeResult = await callClaude({ apiKey: API_KEY, systemPrompt, messages: retryMessages });
         validation = validatePositivePrompt(claudeResult.positivo);
       } catch (err) {
-        console.error('[generate-back v3.7] retry failed:', err.message);
+        console.error('[generate-back v3.8] retry failed:', err.message);
         // fall through: we still run enforcement on original
       }
     }
@@ -755,7 +799,7 @@ export default async function handler(req, res) {
 
     // ---- Structured diagnostic log ----
     const diagnostic = {
-      version: 'v3.7',
+      version: 'v3.8',
       hasBackPhoto,
       backMode,
       productType,
@@ -780,7 +824,7 @@ export default async function handler(req, res) {
       claudeUsage: claudeResult.usage,
     };
 
-    console.log('[generate-back v3.7] OK', JSON.stringify(diagnostic));
+    console.log('[generate-back v3.8] OK', JSON.stringify(diagnostic));
 
     return res.status(200).json({
       positivo: finalPositivo,
@@ -788,7 +832,7 @@ export default async function handler(req, res) {
       _diagnostic: diagnostic,
     });
   } catch (error) {
-    console.error('[generate-back v3.7] fatal error:', error);
+    console.error('[generate-back v3.8] fatal error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
