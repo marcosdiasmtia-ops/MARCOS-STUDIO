@@ -1,4 +1,4 @@
-// fal.ai Nano Banana image generation proxy (v3.1)
+// fal.ai Nano Banana image generation proxy (v3.2)
 //
 // HISTÓRICO DE FIXES:
 // v2.2 — Fix 1: âncora de identidade
@@ -17,6 +17,18 @@
 //        shoulder, neck aligned...") — modelo confundia e gerava Frankenstein
 //        (tronco frontal + cabeça de costas). v3.1 reduz anchor de back pra
 //        ~4 linhas, mantendo só identidade + anti-contaminação de produto.
+// v3.2 — DOIS FIXES CIRÚRGICOS NA BACK ANCHOR:
+//        1) Reabertura com "Rear view of the same woman..." em vez de
+//           "Woman standing back view, same woman...". "Rear view" no início
+//           fixa orientação; "standing" sugeria pose estática e "same woman
+//           as shown" induzia cópia da pose da imagem 1. Fix do bug 2 do
+//           handoff v3.1 (V03 intermitente voltava frontal).
+//        2) Quando há productDescription, reforço explícito de que a SEGUNDA
+//           imagem mostra as COSTAS do produto — preservar ziperes, recortes,
+//           aberturas traseiras etc. Sem esse reforço, Nano Banana ignorava
+//           o design traseiro e gerava costas genérica (bug 1 do handoff).
+//        NÃO MEXIDO: buildIdentityAnchorFrontal (frontal ok), generate-back.js
+//        (v3.1 ok), anti-contaminação de tatuagem/identidade (bug 3, separado).
 
 const ANATOMY_GUARD_POSITIVE =
   'Natural foot positioning with both feet pointing forward in anatomically correct angles. ' +
@@ -113,28 +125,33 @@ function buildIdentityAnchorFrontal(profileName, bodyDescription, facePrompt, pr
   return parts.length ? parts.join('. ') + '. ' : '';
 }
 
-// ─── BACK anchor (v3.1 — SIMPLIFICADO) ───
-// Aprendizado: v3.0 era contraditório demais ("back fully to camera" + "face NOT
-// visible" + "neck aligned with spine" + imagem frontal visualmente dominante =
-// Frankenstein: tronco frontal + cabeça de costas).
-// Projeto legado comprovou que Nano Banana quer prompts CURTOS pra back view —
-// tipo "Woman standing back view wearing the outfit from reference image". Sem
-// regras negativas empilhadas. O modelo entende e executa.
+// ─── BACK anchor (v3.2 — DOIS FIXES CIRÚRGICOS SOBRE v3.1) ───
+// v3.1 resolveu o Frankenstein (torção + "meia-frente-meia-costas") simplificando
+// o anchor, mas sobraram dois bugs:
+//  Bug 1: "produto diferente nas costas" — Nano Banana gerava costas genérica,
+//         sem reproduzir ziper/recortes/detalhes traseiros mostrados na Foto 3.
+//  Bug 2: V03 intermitentemente voltava FRONTAL (1 em 3) apesar do view_type=back.
 //
-// O que mantivemos:
+// v3.2 atua em dois pontos MUITO específicos:
+//  1) Abertura: "Rear view of the same woman shown in..." em vez de
+//     "Woman standing back view, same woman as shown in...". "Rear view" no
+//     início é diretivo e fixa orientação; "standing" sugeria pose estática
+//     e "same woman as shown" induzia cópia da pose da foto 1 (que é frontal).
+//  2) productDescription: adiciona uma frase explicando que a SEGUNDA imagem
+//     mostra as COSTAS do produto, com checklist de detalhes traseiros a
+//     preservar. Sem esse hint, o modelo tratava a foto de costas do produto
+//     como "referência genérica de peça" e gerava silhueta lisa.
+//
+// Mantido de v3.1 (funcionando):
 //  - facePrompt (identidade multi-influencer)
-//  - productDescription + anti-contaminação (ex: não copiar tatuagem do modelo
-//    da foto do produto, que é bug separado do de costas)
-// O que removemos:
-//  - "Woman identical to FIRST reference" (palavra "identical" induz cópia de pose)
-//  - Bloco "CRITICAL ORIENTATION RULE" gigante com múltiplas negações
-//  - "face must NOT be visible in profile / partially / over the shoulder" etc
+//  - bodyDescription
+//  - anti-contaminação (tatuagem/skin/hair do modelo da foto do produto)
 function buildIdentityAnchorBack(profileName, bodyDescription, facePrompt, productDescription, numRefImages) {
   const parts = [];
 
   if (numRefImages >= 2) {
-    // Instrução principal: curta e direta, padrão projeto legado.
-    parts.push(`Woman standing back view, same woman as shown in the FIRST reference image`);
+    // v3.2 — Fix do bug 2: "Rear view" no início fixa orientação.
+    parts.push(`Rear view of the same woman shown in the FIRST reference image`);
 
     // Identidade textual — ajuda multi-influencer sem empilhar restrições de pose.
     if (facePrompt && facePrompt.trim()) {
@@ -145,10 +162,14 @@ function buildIdentityAnchorBack(profileName, bodyDescription, facePrompt, produ
       parts.push(`Body type: ${bodyDescription.trim()}`);
     }
 
-    // Produto + anti-contaminação (bug separado, mantido porque já funcionava)
+    // Produto + anti-contaminação
     if (productDescription && productDescription.trim()) {
+      // v3.2 — Fix do bug 1: reforço explícito de que a imagem 2 mostra as COSTAS.
       parts.push(
         `Wearing the outfit shown in the SECOND reference image. ` +
+        `The SECOND reference image shows the BACK of the garment — ` +
+        `preserve the rear design details (zippers, seams, openings, back cuts, ` +
+        `closures, straps, panels) exactly as shown. ` +
         `Garment details: ${productDescription.trim()}`
       );
       parts.push(
@@ -165,8 +186,8 @@ function buildIdentityAnchorBack(profileName, bodyDescription, facePrompt, produ
       );
     }
   } else if (numRefImages === 1) {
-    // Fallback — só 1 imagem (improvável mas tratado)
-    parts.push(`Woman standing back view, same woman as shown in the reference image`);
+    // Fallback — só 1 imagem (improvável mas tratado). v3.2 — mesma abertura "Rear view".
+    parts.push(`Rear view of the same woman shown in the reference image`);
     if (facePrompt && facePrompt.trim()) {
       parts.push(`Same identity: ${facePrompt.trim()}`);
     }
@@ -230,7 +251,7 @@ export default async function handler(req, res) {
       finalNegative = sanitizeNegativePrompt(negative_prompt);
     }
 
-    console.log(`[image v3.1] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}, negLen=${finalNegative?.length||0}`);
+    console.log(`[image v3.2] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'—'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}, negLen=${finalNegative?.length||0}`);
 
     const body = {
       prompt: finalPrompt,
@@ -252,7 +273,7 @@ export default async function handler(req, res) {
 
     if (!submitRes.ok) {
       const errText = await submitRes.text();
-      console.error(`[image v3.1] fal.ai submit error ${submitRes.status}:`, errText);
+      console.error(`[image v3.2] fal.ai submit error ${submitRes.status}:`, errText);
       return res.status(submitRes.status).json({ error: `fal.ai error: ${submitRes.status}`, details: errText });
     }
 
@@ -268,7 +289,7 @@ export default async function handler(req, res) {
     const statusUrl = submitData.status_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}/status`;
     const responseUrl = submitData.response_url || `https://queue.fal.run/fal-ai/nano-banana/requests/${requestId}`;
 
-    console.log(`[image v3.1] Queued: ${requestId}`);
+    console.log(`[image v3.2] Queued: ${requestId}`);
 
     let attempts = 0;
     const maxAttempts = 60;
@@ -280,7 +301,7 @@ export default async function handler(req, res) {
         headers: { 'Authorization': `Key ${FAL_KEY}` },
       });
       if (!statusRes.ok) {
-        console.error(`[image v3.1] Status check error ${statusRes.status}`);
+        console.error(`[image v3.2] Status check error ${statusRes.status}`);
         continue;
       }
       const status = await statusRes.json();
@@ -294,14 +315,14 @@ export default async function handler(req, res) {
       }
 
       if (status.status === 'FAILED') {
-        console.error(`[image v3.1] Generation failed:`, status);
+        console.error(`[image v3.2] Generation failed:`, status);
         return res.status(500).json({ error: 'Image generation failed', details: status });
       }
     }
 
     return res.status(408).json({ error: 'Timeout waiting for image', requestId });
   } catch (error) {
-    console.error('[image v3.1] Error:', error);
+    console.error('[image v3.2] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
