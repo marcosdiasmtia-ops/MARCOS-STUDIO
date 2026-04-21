@@ -118,6 +118,19 @@ export default function App() {
       return;
     }
 
+    // v3.4: reset de state no início de CADA geração de prompts.
+    // Corrige o bug onde backPromptReady ficava true de uma geração
+    // anterior (ex: ao regerar prompts do mesmo produto), fazendo
+    // o botão "Gerar Prompt Costas" sumir da UI e o prompt de costas
+    // inicial (gerado cego pelo /api/generate, sem ver nenhuma imagem)
+    // ser usado pra gerar a imagem de costas. Agora a cada geração
+    // o fluxo recomeça do zero: usuário precisa gerar frontal e
+    // clicar em "Gerar Prompt Costas" pra o /api/generate-back v3.3
+    // rodar com a imagem frontal gerada + foto de costas do produto.
+    setBackPromptReady(false);
+    setGeneratedImages({ frontal: null, costas: null });
+    setGeneratedVideos({});
+
     setPage('loading'); setError(null);
     setLoadingMsg('Gerando prompts visuais...');
 
