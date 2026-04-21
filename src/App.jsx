@@ -282,6 +282,12 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
         frontalPrompt: prompts.promptImagemFrontal?.positivo,
         visual: prompts.visual,
         camadas: prompts.camadas,
+        // v3.3 — Claude agora olha a foto de costas do produto e descreve
+        // o design traseiro (ziper, recortes, etc) no próprio prompt.
+        // Se form.fotoCostas não existir, passa undefined e generate-back
+        // usa o fallback v3.1 (sem regressão).
+        backProductImageBase64: form.fotoCostas?.base64,
+        backProductImageMimeType: form.fotoCostas?.mimeType,
       });
 
       // Update prompts with new back prompt

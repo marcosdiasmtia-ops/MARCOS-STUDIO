@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v3.0 — view_type bifurcation)
+// API helper functions for all backend calls (v2.4 — facePrompt pipeline)
 
 export async function callClaude(system, userMessage) {
   const res = await fetch('/api/generate', {
@@ -122,11 +122,29 @@ export async function generateImage(prompt, imageUrls, extras = {}) {
   return data.images?.[0]?.url || null;
 }
 
-export async function generateBackPrompt({ frontalImageUrl, frontalPrompt, visual, camadas }) {
+// v3.3 — agora aceita backProductImageBase64 + backProductImageMimeType
+// (foto de costas do produto) pra Claude olhar a peça e descrever o design
+// traseiro no prompt. Campos são opcionais: se não vierem, generate-back
+// cai no fallback (comportamento idêntico ao v3.1).
+export async function generateBackPrompt({
+  frontalImageUrl,
+  frontalPrompt,
+  visual,
+  camadas,
+  backProductImageBase64,
+  backProductImageMimeType,
+}) {
   const res = await fetch('/api/generate-back', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ frontalImageUrl, frontalPrompt, visual, camadas })
+    body: JSON.stringify({
+      frontalImageUrl,
+      frontalPrompt,
+      visual,
+      camadas,
+      backProductImageBase64,
+      backProductImageMimeType,
+    })
   });
   const text = await res.text();
   let data;
