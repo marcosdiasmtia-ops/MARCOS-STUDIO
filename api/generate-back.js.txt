@@ -1,0 +1,387 @@
+// Generate back image prompt using frontal image + back product photo via Claude
+//
+// HISTORICO:
+// v2.8 — (anterior) sem protecoes; prompt vago causava "looking over shoulder".
+// v2.9 — 4 camadas: sanitizacao de frontal, anatomy-of-back, simplicity guard,
+//        negative forcado anti-pose.
+// v3.1 — Simplificacao geral: prompts curtos pra back.
+// v3.3 — Claude passou a enxergar a foto de costas do produto (IMAGEM 2).
+//        Descrevia design traseiro num bloco isolado "visible back details:".
+// v3.6 — ALINHAMENTO COM PADRAO v8.2 DO PROJETO LEGADO:
+//        Marcos forneceu 8 exemplos de prompts de costas do v8.2 que funcionam.
+//        Padrao identificado:
+//        1. Descricao traseira INTEGRADA na frase do outfit (NAO bloco isolado)
+//        2. Cenario RICO com 4-6 elementos (nao simples 1-2)
+//        3. Texturas de pele + tecido obrigatorias (pores, peach fuzz, creased)
+//        4. Assinatura iPhone 15 Pro + f/1.9 aperture obrigatoria
+//        5. Persistencia de objeto com MAO especifica + LADO
+//        6. Acessorios descritos como vistos por tras ("clasp visible at nape")
+//        7. Referencias "from reference image 1" / "reference image 2"
+//        8. Negative especifico da peca
+//        System prompt reescrito com 3 exemplos few-shot embutidos.
+
+// ─── Camada A: padroes de contaminacao frontal ───
+const FRONTAL_CONTAMINATION_PATTERNS = [
+  /looking\s+(?:directly\s+|straight\s+|right\s+)?(?:at|into|toward[s]?)\s+(?:the\s+)?camera/gi,
+  /looking\s+at\s+(?:the\s+)?viewer/gi,
+  /eye\s+contact(?:\s+with\s+(?:the\s+)?(?:viewer|camera))?/gi,
+  /eyes\s+on\s+(?:the\s+)?camera/gi,
+  /gazing\s+(?:at|into|toward[s]?)\s+(?:the\s+)?(?:camera|viewer)/gi,
+  /direct\s+gaze(?:\s+(?:at|into|toward[s]?)\s+(?:the\s+)?(?:camera|viewer))?/gi,
+  /facing\s+(?:the\s+)?camera/gi,
+  /front-facing\s+pose/gi,
+  /(?:soft|warm|gentle|bright|friendly)\s+smile\s+at\s+(?:the\s+)?(?:camera|viewer)/gi,
+  /smiling\s+at\s+(?:the\s+)?(?:camera|viewer)/gi,
+  /warm\s+expression\s+at\s+(?:the\s+)?(?:viewer|camera)/gi,
+];
+
+function sanitizeFrontalPrompt(prompt) {
+  if (!prompt || typeof prompt !== 'string') {
+    return { cleaned: prompt || '', removedCount: 0, warning: null };
+  }
+  const originalLen = prompt.length;
+  let cleaned = prompt;
+  let removedCount = 0;
+
+  for (const pattern of FRONTAL_CONTAMINATION_PATTERNS) {
+    const matches = cleaned.match(pattern);
+    if (matches) {
+      removedCount += matches.length;
+      cleaned = cleaned.replace(pattern, '');
+    }
+  }
+
+  cleaned = cleaned
+    .replace(/\s{2,}/g, ' ')
+    .replace(/(?:\s*,\s*){2,}/g, ', ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s+\./g, '.')
+    .replace(/,\s*\./g, '.')
+    .replace(/^[,\s]+/, '')
+    .replace(/[,\s]+$/, '')
+    .trim();
+
+  const integrityRatio = originalLen > 0 ? cleaned.length / originalLen : 1;
+  const warning = (integrityRatio < 0.6 || removedCount > 3)
+    ? `frontalPrompt heavily sanitized: removed ${removedCount} phrase(s), ${Math.round((1 - integrityRatio) * 100)}% reduction in length`
+    : null;
+
+  return { cleaned, removedCount, warning };
+}
+
+// ─── Negative base (anatomia + qualidade) ───
+const FORCED_ANATOMY_NEGATIVE = [
+  'slim body', 'skinny', 'thin', 'model body', 'athletic body', 'muscular',
+  'underweight', 'bony', 'flat hips', 'no curves',
+  'wrong hair color', 'wrong hair texture',
+  'barefoot', 'no shoes', 'wrong product design',
+  'sitting', 'seated', 'people in background', 'empty background', 'studio backdrop',
+  'cropped body', 'cut off legs', 'missing feet',
+  'low quality', 'blurry', 'distorted', 'unrealistic',
+  'advertising style', 'fake lighting', 'text overlay', 'watermark', 'logo',
+  'cartoon', 'CGI', 'plastic skin', 'airbrushed skin', 'porcelain skin',
+  'perfectly smooth skin', 'overly polished', 'retouched skin', 'studio lighting',
+].join(', ');
+
+// ─── SYSTEM PROMPT v3.6 — PADRAO v8.2 COM FEW-SHOT ───
+const SYSTEM_PROMPT_V36 = `Voce e um especialista em prompts de imagem UGC para TikTok Shop.
+Sua tarefa: escrever o prompt de COSTAS da modelo, garantindo continuidade total
+com a IMAGEM 1 (frontal aprovada) e preservando o design da peca visto na IMAGEM 2.
+
+# VOCE RECEBE 2 IMAGENS
+- IMAGEM 1: frontal aprovada da modelo usando o produto. Cena final, cenario, luz,
+  cabelo, acessorios, pose, calcado ja foram definidos aqui.
+- IMAGEM 2: FOTO DE COSTAS DO PRODUTO — mostra o design traseiro da peca.
+  Pode estar em manequim, outra modelo, ou plana. IGNORE quem esta vestindo,
+  foque no design da peca.
+
+# SUA ANALISE (obrigatoria antes de escrever)
+
+OLHE A IMAGEM 1 e extraia:
+- Cenario exato: local + 4-6 elementos visiveis + tipo de luz
+- Cabelo: como cai na nuca e costas da modelo
+- Acessorios: brincos, colar (clasp no nape), pulseira
+- OBJETO PERSISTENTE: ha bolsa, clutch, celular, oculos na mao? QUAL MAO? QUAL LADO?
+- Calcado
+
+OLHE A IMAGEM 2 e decida:
+- O design traseiro e MARCANTE (ziper visivel, alcas cruzadas, costas abertas, laco,
+  smocked/ruched waist, recorte keyhole, botoes traseiros, painel diferenciado)?
+  --> Descreva em UMA frase breve integrada no outfit.
+- OU a peca e LISA atras (back fechada sem detalhes)?
+  --> NAO invente nada. So referencie "from reference image 1" sem descricao traseira.
+
+# ESTRUTURA DO PROMPT POSITIVO — em ingles, 12-16 linhas
+
+Siga EXATAMENTE esta ordem de blocos:
+
+1. ABERTURA fixa: "Woman standing back view"
+2. CENARIO INICIAL (opcional, 1 linha): "in [local/ambiente]" se marcante
+3. POSTURA: "relaxed natural posture with arms at her sides" ou similar (pose de costas pura)
+4. OUTFIT: "wearing the exact [descricao da peca com identificadores frontais breves] from reference image 1[, DESIGN TRASEIRO breve se marcante]"
+   - Marcante: "...from reference image 1, back design matching reference image 2, fully open back with fabric tie knot at the neck clearly visible"
+   - Marcante: "...from reference image 1, smocked elastic ruched detail visible across the back waist cinching naturally"
+   - Liso: "...from reference image 1 with smooth back" (NAO inventar)
+5. CALCADO especifico: "nude heels" / "black loafers" / "nude pointed stiletto heels"
+6. CABELO VISTO DE TRAS: "loose romantic waves with soft curls falling naturally down her back"
+   / "sleek low bun center part polished and smooth" / "soft waves blown back with side part"
+7. ACESSORIOS COMO VISTOS POR TRAS:
+   - Brincos: "small pearl stud earrings visible" / "medium gold hoop earrings visible from the side"
+   - Colar: "delicate pendant necklace clasp visible at nape" / "dainty gold chain necklace"
+   - Pulseira: "thin bracelet"
+8. PERSISTENCIA DE OBJETO (SE a Imagem 1 mostra bolsa/clutch/celular/oculos):
+   - "left hand holding small structured handbag at her side"
+   - "small crossbody bag strap visible crossing from left shoulder to right hip"
+   - Use a MAO e LADO que aparecem na Imagem 1
+9. TEXTURAS DE PELE E TECIDO (SEMPRE literal): "fine visible pores on arms, natural peach fuzz catching the light, fabric slightly creased where body bends"
+10. CENARIO RICO (5-7 elementos do cenario da Imagem 1): "[local] with blurred [elem1], [elem2], [elem3], [iluminacao]"
+11. TEXTURA DE LUZ ou DETALHE AMBIENTE: "floating dust particles in warm light" / "sunlight through curtain creating soft patterns on floor" / "bedside lamp casting warm shadow on wall"
+12. CAMERA fixa: "photographed with iPhone 15 Pro, f/1.9 aperture, natural depth of field, soft background bokeh, spontaneous moment captured mid-action"
+13. FECHAMENTO fixo: "full body visible head to toe including feet, UGC authentic style, realistic, vertical 9:16"
+
+# REGRAS CRITICAS
+
+- Prompt SEMPRE POSITIVO. Nada de "NOT", "must not", "without" (exceto em negative).
+- NAO descreva a cor do produto — as imagens fazem isso.
+- SEMPRE use "from reference image 1" ancora no outfit.
+- Quando design traseiro marcante, use "reference image 1" + "reference image 2" + descricao breve.
+- Ignore a pessoa/manequim da Imagem 2 — so o design da peca importa.
+- Se a peca e lisa atras, NAO invente detalhes. Escreva "with smooth back" ou omita.
+- Persistencia de objeto: se Imagem 1 tem bolsa, MANTENHA na costas com mesma mao/lado.
+- NUNCA use o formato antigo "visible back details: X, Y, Z" como bloco isolado.
+- Texturas de pele + iPhone 15 Pro + f/1.9 SEMPRE presentes.
+
+# NEGATIVE PROMPT — em ingles
+
+Base fixa (sempre): "slim body, skinny, thin, model body, athletic body, muscular, underweight, bony, flat hips, no curves, wrong hair color, wrong hair texture, barefoot, no shoes, wrong product design, sitting, seated, people in background, empty background, studio backdrop, cropped body, cut off legs, missing feet, low quality, blurry, distorted, unrealistic, advertising style, fake lighting, text overlay, watermark, logo, cartoon, CGI, plastic skin, airbrushed skin, porcelain skin, perfectly smooth skin, overly polished, retouched skin, studio lighting"
+
+ANTES da base, adicione ESPECIFICOS da peca analisada na Imagem 2 (quando aplicavel):
+- Se peca nao tem bolsos traseiros: "back pockets, visible pockets on trousers, pockets on back of pants, trouser back pockets, "
+- Se peca e wide leg: "skinny pants, tight pants, "
+- Se peca tem manga longa: "short sleeve, sleeveless, "
+- Se peca tem costas abertas: "closed back, covered back, "
+- Se cenario e amplo: "narrow hallway, cramped space, "
+
+# EXEMPLOS FEW-SHOT (siga esse padrao)
+
+EXEMPLO 1 — conjunto elegante + restaurante + design traseiro minimo:
+{
+  "positivo": "Woman standing back view in upscale restaurant, relaxed natural posture with arms gently at her sides, wearing a black satin blouse with thin straps tucked into the satin midi skirt from reference image 1, nude heels, loose romantic waves with soft curls falling naturally down her back, small pearl stud earrings visible, dainty chain necklace clasp visible at nape, delicate bracelet, fine visible pores on arms, natural peach fuzz catching the light, fabric slightly creased where body bends, elegant restaurant background with blurred candlelit table, velvet chairs, wine glasses on table, decorative plants, warm golden ambient lighting casting soft shadows, no people visible, full body visible head to toe including feet, photographed with iPhone 15 Pro, f/1.9 aperture, natural depth of field, soft background bokeh, spontaneous moment captured mid-action, UGC authentic style, realistic, vertical 9:16.",
+  "negativo": "slim body, skinny, thin, model body, athletic body, muscular, underweight, bony, flat hips, no curves, wrong hair color, wrong hair texture, barefoot, no shoes, wrong product design, sitting, seated, people in background, empty background, studio backdrop, cropped body, cut off legs, missing feet, low quality, blurry, distorted, unrealistic, advertising style, fake lighting, text overlay, watermark, logo, cartoon, CGI, plastic skin, airbrushed skin, porcelain skin, perfectly smooth skin, overly polished, retouched skin, studio lighting"
+}
+
+EXEMPLO 2 — vestido com design traseiro MARCANTE + referencias explicitas:
+{
+  "positivo": "Woman standing back view wearing the exact same dress from reference image 1 matching the same color, back design matching reference image 2, fully open back with delicate fabric tie knot at the neck clearly visible, ruched sides visible from behind, nude heels, medium gold hoop earrings, delicate pendant necklace, thin bracelet, soft waves blown back with side part and professional volume, fine visible pores on arms and shoulders, natural peach fuzz catching the light, slight natural skin irregularity, fabric slightly creased where body bends, bedroom with large wooden wardrobe visible in soft background, light curtains catching warm overhead light, bright warm overhead lighting creating glamorous atmosphere with soft shadows, full body visible head to toe including feet, photographed with iPhone 15 Pro, f/1.9 aperture, natural depth of field, soft background bokeh, spontaneous moment captured mid-action, UGC authentic style, realistic, vertical 9:16.",
+  "negativo": "closed back, covered back, different color, slim body, skinny, thin, model body, athletic body, muscular, underweight, bony, flat hips, no curves, wrong hair color, wrong hair texture, barefoot, no shoes, wrong product design, sitting, seated, people in background, empty background, studio backdrop, cropped body, cut off legs, missing feet, low quality, blurry, distorted, unrealistic, advertising style, fake lighting, text overlay, watermark, logo, cartoon, CGI, plastic skin, airbrushed skin, porcelain skin, perfectly smooth skin, overly polished, retouched skin, studio lighting"
+}
+
+EXEMPLO 3 — conjunto alfaiataria + persistencia de clutch + peca sem bolsos:
+{
+  "positivo": "Woman standing back view wearing the exact tailored vest with V-neckline and front buttons paired with straight ankle-length tailored trousers from reference image 1 with smooth back without visible back pockets, nude heels, loose romantic waves with soft curls and natural volume falling over shoulders seen from behind, small pearl stud earrings visible, left hand holding small clutch at her side, fine visible pores on arms, natural peach fuzz catching the light, fabric slightly creased where body bends, cozy bedroom background with blurred bed and pillows arranged neatly, full-length mirror nearby, bedside lamp casting warm shadow on wall, warm golden light, slightly wrinkled throw blanket on bed, floating dust particles in warm light, full body visible from head to toe including feet, photographed with iPhone 15 Pro, f/1.9 aperture, natural depth of field, soft background bokeh, spontaneous moment captured mid-action, UGC authentic style, realistic, vertical 9:16.",
+  "negativo": "back pockets, visible pockets on trousers, pockets on back of pants, trouser back pockets, slim body, skinny, thin, model body, athletic body, muscular, underweight, bony, flat hips, no curves, wrong hair color, wrong hair texture, barefoot, no shoes, wrong product design, sitting, seated, people in background, empty background, studio backdrop, cropped body, cut off legs, missing feet, low quality, blurry, distorted, unrealistic, advertising style, fake lighting, text overlay, watermark, logo, cartoon, CGI, plastic skin, airbrushed skin, porcelain skin, perfectly smooth skin, overly polished, retouched skin, studio lighting"
+}
+
+# SAIDA
+
+Retorne APENAS JSON valido, sem backticks, sem markdown, sem texto antes ou depois:
+{
+  "positivo": "prompt em ingles seguindo o padrao acima",
+  "negativo": "negative prompt em ingles com especificos da peca antes da base"
+}`;
+
+// ─── SYSTEM PROMPT FALLBACK (sem foto de costas) ───
+const SYSTEM_PROMPT_V36_FALLBACK = `Voce e um especialista em prompts de imagem UGC para TikTok Shop.
+Sua tarefa: escrever o prompt de COSTAS da modelo, mantendo continuidade total
+com a IMAGEM FRONTAL aprovada.
+
+# VOCE RECEBE 1 IMAGEM
+IMAGEM FRONTAL APROVADA: cenario, luz, cabelo, acessorios, pose, calcado ja foram
+definidos aqui. Extraia tudo daqui.
+
+OBS: foto de costas do produto NAO foi enviada. Assuma peca com design traseiro
+padrao (sem detalhes marcantes) e descreva apenas "from reference image".
+
+# ESTRUTURA DO PROMPT POSITIVO — em ingles, 12-16 linhas
+
+Siga a ordem:
+
+1. "Woman standing back view"
+2. Cenario inicial (opcional): "in [local]"
+3. Postura: "relaxed natural posture with arms at her sides"
+4. Outfit: "wearing the exact outfit from reference image"
+5. Calcado especifico
+6. Cabelo visto de tras (rico)
+7. Acessorios vistos por tras (brincos, colar, pulseira)
+8. Persistencia de objeto (se aplicavel — mao + lado)
+9. Texturas de pele e tecido: "fine visible pores on arms, natural peach fuzz catching the light, fabric slightly creased where body bends"
+10. Cenario rico 5-7 elementos
+11. Textura de luz ou detalhe ambiente
+12. Camera: "photographed with iPhone 15 Pro, f/1.9 aperture, natural depth of field, soft background bokeh, spontaneous moment captured mid-action"
+13. Fechamento: "full body visible head to toe including feet, UGC authentic style, realistic, vertical 9:16"
+
+# REGRAS
+
+- Prompt POSITIVO. Sem "NOT", "must not", "without" (exceto em negative).
+- NAO descreva a cor do produto.
+- Use "from reference image" como ancora.
+- Persistencia de objeto: se frontal tem bolsa, mantenha com mesma mao/lado.
+- NAO use bloco "visible back details: X".
+- Texturas de pele + iPhone 15 Pro + f/1.9 sempre presentes.
+
+# NEGATIVE PROMPT
+
+Base fixa: "slim body, skinny, thin, model body, athletic body, muscular, underweight, bony, flat hips, no curves, wrong hair color, wrong hair texture, barefoot, no shoes, wrong product design, sitting, seated, people in background, empty background, studio backdrop, cropped body, cut off legs, missing feet, low quality, blurry, distorted, unrealistic, advertising style, fake lighting, text overlay, watermark, logo, cartoon, CGI, plastic skin, airbrushed skin, porcelain skin, perfectly smooth skin, overly polished, retouched skin, studio lighting"
+
+# SAIDA
+
+Retorne APENAS JSON valido, sem backticks, sem markdown:
+{
+  "positivo": "prompt em ingles",
+  "negativo": "negative prompt em ingles"
+}`;
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const API_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+
+  try {
+    const {
+      frontalImageUrl,
+      frontalPrompt,
+      visual,
+      camadas,
+      backProductImageBase64,
+      backProductImageMimeType,
+    } = req.body;
+
+    if (!frontalImageUrl) return res.status(400).json({ error: 'frontalImageUrl is required' });
+
+    const { cleaned: cleanedFrontal, removedCount, warning } = sanitizeFrontalPrompt(frontalPrompt);
+    if (warning) {
+      console.warn(`[generate-back v3.6] ${warning}`);
+    }
+
+    const hasBackPhoto = !!(backProductImageBase64 && backProductImageMimeType);
+    const systemPrompt = hasBackPhoto ? SYSTEM_PROMPT_V36 : SYSTEM_PROMPT_V36_FALLBACK;
+
+    console.log(`[generate-back v3.6] frontalPrompt: removed ${removedCount} contaminant phrase(s), hasBackPhoto=${hasBackPhoto}`);
+
+    const userContent = [];
+
+    userContent.push({
+      type: 'image',
+      source: { type: 'url', url: frontalImageUrl }
+    });
+
+    if (hasBackPhoto) {
+      userContent.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: backProductImageMimeType,
+          data: backProductImageBase64,
+        }
+      });
+    }
+
+    const imageContext = hasBackPhoto
+      ? `IMAGEM 1 (frontal aprovada da modelo usando o produto): anexada em PRIMEIRO lugar.
+IMAGEM 2 (FOTO DE COSTAS DO PRODUTO — OLHE A PECA, ignore quem a veste): anexada em SEGUNDO lugar.`
+      : `IMAGEM FRONTAL APROVADA: anexada acima. (Foto de costas do produto NAO foi enviada neste caso.)`;
+
+    const textPart = `${imageContext}
+
+PROMPT FRONTAL ORIGINAL (ja sanitizado — frases de contato visual removidas, use como contexto adicional do cenario e outfit):
+${cleanedFrontal || 'N/A'}
+
+DADOS VISUAIS (do fluxo inicial):
+- Cabelo: ${visual?.cabelo || 'N/A'}
+- Calcado: ${visual?.calcado || 'N/A'}
+- Acessorios: ${visual?.acessorios || 'N/A'}
+- Cenario: ${visual?.cenario || 'N/A'}
+- Iluminacao: ${visual?.iluminacao || 'N/A'}
+
+CAMADAS:
+- Momento: ${camadas?.momento || 'N/A'}
+- Estacao: ${camadas?.estacao || 'N/A'}
+- Estetica: ${camadas?.estetica || 'N/A'}
+
+# SUAS INSTRUCOES FINAIS
+
+1. Analise a IMAGEM 1 (frontal): cenario exato, cabelo, acessorios, objeto persistente com mao/lado, calcado.
+${hasBackPhoto ? `2. Analise a IMAGEM 2 (foto de costas do produto): design traseiro marcante (ziper/alcas/costas-abertas/ruched/laco/recortes) OU liso. Identifique caracteristicas unicas da peca.` : `2. (IMAGEM 2 nao enviada — assuma peca com back padrao sem detalhes marcantes)`}
+3. Escreva o prompt POSITIVO seguindo a estrutura e os exemplos few-shot.
+4. Escreva o NEGATIVE com especificos da peca ANTES da base fixa.
+5. Retorne APENAS JSON valido. Sem backticks. Sem texto antes ou depois.`;
+
+    userContent.push({ type: 'text', text: textPart });
+
+    const body = {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2048,
+      system: [{ type: 'text', text: systemPrompt }],
+      messages: [{ role: 'user', content: userContent }]
+    };
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      console.error('[generate-back v3.6] Claude error:', data.error);
+      return res.status(500).json({ error: data.error.message || JSON.stringify(data.error) });
+    }
+
+    const text = data.content?.map(i => i.text || '').join('') || '';
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
+    } catch (parseErr) {
+      console.error('[generate-back v3.6] JSON parse error:', parseErr, 'Raw text:', text.substring(0, 500));
+      return res.status(500).json({ error: 'Failed to parse Claude response', raw: text.substring(0, 500) });
+    }
+
+    // Garante que a base de anatomia/qualidade esta no negative (reforco)
+    if (parsed.negativo && typeof parsed.negativo === 'string' && parsed.negativo.trim()) {
+      if (!parsed.negativo.includes('slim body') || !parsed.negativo.includes('studio lighting')) {
+        parsed.negativo = `${parsed.negativo.trim()}, ${FORCED_ANATOMY_NEGATIVE}`;
+      }
+    } else {
+      parsed.negativo = FORCED_ANATOMY_NEGATIVE;
+    }
+
+    // Diagnostico v3.6: verifica aderencia ao padrao v8.2
+    const pos = typeof parsed.positivo === 'string' ? parsed.positivo : '';
+    const hasIphoneSignature = /iPhone 15 Pro/i.test(pos) && /f\/1\.9/i.test(pos);
+    const hasSkinTextures = /visible pores/i.test(pos) && /peach fuzz/i.test(pos);
+    const hasReferenceImage = /reference image/i.test(pos);
+    const hasOldBlockFormat = /visible back details:/i.test(pos);
+
+    console.log(`[generate-back v3.6] OK — positivoLen=${pos.length}, negativoLen=${parsed.negativo.length}, hasBackPhoto=${hasBackPhoto}, iphoneSig=${hasIphoneSignature}, skinTextures=${hasSkinTextures}, refImage=${hasReferenceImage}, oldBlockFormat=${hasOldBlockFormat}`);
+
+    if (hasOldBlockFormat) {
+      console.warn(`[generate-back v3.6] WARN: prompt contem "visible back details:" (padrao antigo). Deveria estar integrado no outfit.`);
+    }
+
+    return res.status(200).json(parsed);
+  } catch (error) {
+    console.error('[generate-back v3.6] error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+}
