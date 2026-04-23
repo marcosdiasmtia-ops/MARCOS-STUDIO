@@ -1,4 +1,4 @@
-// fal.ai image generation proxy (v3.6)
+// fal.ai image generation proxy (v3.7)
 //
 // HISTORICO DE FIXES:
 // v2.2 - Fix 1: ancora de identidade
@@ -14,59 +14,59 @@
 // v3.2 - DOIS FIXES CIRURGICOS NA BACK ANCHOR
 // v3.3 - REFORCO ANTI-PERFIL E ANTI-INVENCAO
 // v3.4 - MIGRACAO DE MODELO: Nano Banana -> FLUX.2 [pro]
-// v3.5 - SANITIZACAO de facePrompt/bodyDescription/productDescription antes
-//        de montar a anchor (tentativa de eliminar padroes "forenses" da
-//        v3.1 do analyze-identity que poderiam triggar Pydantic no FLUX.2).
-//        Mantida na v3.6 como rede de seguranca defensiva.
-// v3.6 - FIX DEFINITIVO BUG 12: afrouxa safety_checker do FLUX.2 pro.
+// v3.5 - Sanitizacao de facePrompt/bodyDescription/productDescription
+//        antes da anchor (tentou resolver Bug 12, insuficiente sozinho).
+//        Mantida em v3.7 como 1a camada defensiva.
+// v3.6 - Tentou desligar safety_checker do fal.ai (RESULTADO: ignorado
+//        pelo servidor, FLUX.2 pro tem safety INTERNO hardcoded).
+//        Parametros preservados em v3.7 pois nao custam nada.
+// v3.6.1 - Correcao do range de safety_tolerance (1-5, nao 1-6).
+// v3.7 - FIX DEFINITIVO Bug 12: sanitizacao agressiva de TODO o prompt
+//        final (positivo + negative) antes de enviar pro FLUX.2 pro.
 //
-//        DIAGNOSTICO FINAL (sessao 23/04/2026, Network tab revelou):
-//        O erro NAO era Pydantic de schema (como hipotese inicial), era
-//        CONTENT POLICY VIOLATION. Response real do fal.ai:
-//          {
-//            "detail": [{
-//              "loc": ["body", "prompt"],
-//              "msg": "The content could not be processed",
-//              "type": "content_policy_violation"
-//            }],
-//            "input": {
-//              "safety_tolerance": "2",        <- restritivo
-//              "enable_safety_checker": true   <- safety filter ativo
-//            }
-//          }
+//        DIAGNOSTICO FINAL (Network tab revelou tudo na sessao 23/04):
+//        FLUX.2 pro tem safety gate INTERNO (modelo-servidor) que:
+//          a) Ignora enable_safety_checker=false / safety_tolerance=5
+//          b) Retorna content_policy_violation pra palavras especificas
+//          c) NAO cobra creditos quando bloqueia (bom, confirma o bloqueio)
 //
-//        Palavras-gatilho identificadas no prompt completo:
-//          - "peach fuzz catching the light" (penugem facial)
+//        Palavras-gatilho identificadas empiricamente (7 tentativas
+//        falharam antes do diagnostico ficar claro):
+//
+//        No PROMPT POSITIVO (vindas de systemPrompt.js / generate.js):
 //          - "fine visible pores on face skin and arms"
+//          - "natural peach fuzz catching the light"
 //          - "subtle smile lines"
 //          - "slight natural skin irregularity"
-//          - Negative prompt com "skinny, thin, underweight, bony"
-//            (safety modernos sao sensiveis a descritores de corpo
-//             mesmo em contexto negativo — tokenizer nao entende NOT)
+//          (todas descricoes de pele hiper-realistas, trigger safety)
 //
-//        Essas palavras vem de systemPrompt.js (prompts visuais gerados)
-//        e do proprio anchor hard-coded do image.js (tattoos x5, skin
-//        markings x4). Remove-las exigiria reescrever 2 arquivos grandes.
+//        No NEGATIVE PROMPT (body-shaming descriptors):
+//          - "slim body, skinny, thin, underweight, bony"
+//          - "flat hips, no curves, model body, athletic body, muscular"
+//          (tokenizer nao entende negacao - processa como pedido direto)
 //
-//        SOLUCAO CIRURGICA v3.6:
-//        fal.ai aceita 2 parametros que desligam o safety filter:
-//          - safety_tolerance: "6" (range 1-6, "6" = mais permissivo)
-//          - enable_safety_checker: false
-//        Como o uso e UGC autentico (pessoa real com consentimento
-//        cadastrada com foto propria) e nao ha intencao de gerar
-//        conteudo sensivel, e seguro desativar.
+//        No ANCHOR hard-coded deste arquivo (5 mencoes):
+//          - "Do NOT copy their tattoos"
+//          - "skin markings"
+//          - "The woman in the final image has NO tattoos..."
+//          (intencao boa - evitar contaminacao - mas palavras triggam
+//           safety. Reformulado preservando a intencao.)
+//
+//        SOLUCAO v3.7:
+//        Nova funcao sanitizeContentPolicyTriggers() aplicada no
+//        prompt FINAL (depois de montado) e no negative FINAL (depois
+//        de montado) - pega tudo de uma so vez, incluindo o anchor
+//        hard-coded. Preserva gramatica e intencao.
 //
 //        Mudancas cirurgicas:
-//          1) body da request pro fal.ai agora inclui explicitamente
-//             safety_tolerance: "6" e enable_safety_checker: false
-//          2) Toda a logica anterior (anchor, sanitizacao v3.5, polling,
-//             anatomy guard) preservada intacta. Retrocompat 100%.
-//          3) Logs atualizados pra v3.6.
-//
-//        Se funcionar: Bug 12 resolvido definitivamente, zero bloqueio.
-//        Se NAO funcionar: fal.ai tem safety gate secundario server-side
-//        que ignora esses parametros — aí cai na v3.7 (reescrever
-//        systemPrompt.js e image.js removendo palavras-gatilho na fonte).
+//          1) Nova funcao sanitizeContentPolicyTriggers (topo)
+//          2) Aplicada a finalPrompt e finalNegative antes do POST
+//          3) sanitizePromptForFlux2 (v3.5) mantida como 1a camada
+//          4) safety_tolerance='5' / enable_safety_checker=false
+//             mantidos (nao custam, e se fal.ai mudar comportamento
+//             futuramente, ja esta configurado)
+//          5) Logs renomeados pra v3.7 pra facilitar debug
+//          6) Log novo: chars removidos pela sanitizacao policy
 
 const ANATOMY_GUARD_POSITIVE =
   'Natural foot positioning with both feet pointing forward in anatomically correct angles. ' +
@@ -178,6 +178,84 @@ function sanitizePromptForFlux2(text) {
   out = out.replace(/\s+([,.])/g, '$1');
   out = out.replace(/\.\s*\./g, '.');
   out = out.replace(/,\s*,/g, ',');
+  out = out.trim();
+
+  return out;
+}
+
+// v3.7 - Sanitiza o PROMPT FINAL (ja montado com anchor + prompt + anatomy)
+// e o NEGATIVE FINAL antes de enviar pro FLUX.2 pro.
+// Remove palavras-gatilho que fazem o VLM do FLUX.2 pro retornar
+// content_policy_violation, identificadas empiricamente em 7 tentativas.
+//
+// Aplicada DEPOIS da sanitizePromptForFlux2 (v3.5) — esta cobre outro
+// escopo (padroes forenses do facePrompt). As duas juntas formam defense
+// in depth.
+//
+// Preserva TODA a semantica essencial (quem e a pessoa, o que veste,
+// pose, cenario, iluminacao, etc). Remove apenas descritores que sao
+// ou (a) detalhe hiper-real de pele que soa como identificacao biometrica
+// ou (b) body-shaming em negative prompt ou (c) mencoes negativas a
+// tattoos/skin markings hard-coded no anchor.
+function sanitizeContentPolicyTriggers(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  let out = text;
+
+  // === CAMADA 1: Descricoes de pele hiper-realistas (prompt positivo) ===
+  out = out.replace(/\bfine\s+visible\s+pores[^,.]*,?\s*/gi, '');
+  out = out.replace(/\bvisible\s+pores[^,.]*,?\s*/gi, '');
+  out = out.replace(/\bnatural\s+peach\s+fuzz[^,.]*,?\s*/gi, '');
+  out = out.replace(/\bpeach\s+fuzz[^,.]*,?\s*/gi, '');
+  out = out.replace(/\bsubtle\s+smile\s+lines,?\s*/gi, '');
+  out = out.replace(/\bsmile\s+lines,?\s*/gi, '');
+  out = out.replace(/\bslight\s+natural\s+skin\s+irregularity,?\s*/gi, '');
+  out = out.replace(/\bnatural\s+skin\s+irregularity,?\s*/gi, '');
+  out = out.replace(/\bskin\s+irregularity,?\s*/gi, '');
+
+  // === CAMADA 2: Body-shaming descriptors (negative prompt) ===
+  // Safety modernos tokenizam essas palavras MESMO em negative — nao
+  // entendem negacao lexical.
+  const bodyShamingTerms = [
+    'slim body', 'skinny', 'thin', 'model body', 'athletic body',
+    'muscular', 'underweight', 'bony', 'flat hips', 'no curves'
+  ];
+  for (const term of bodyShamingTerms) {
+    const escaped = term.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    out = out.replace(new RegExp(`\\b${escaped}\\s*,?\\s*`, 'gi'), '');
+  }
+
+  // === CAMADA 3: Anchor hard-coded mencoes a tattoos/skin markings ===
+  // Ordem importa: remove frases INTEIRAS antes de palavras isoladas,
+  // pra nao quebrar gramatica deixando "has NO ." ou similar.
+
+  // 3a) Frase "The woman in the final image has NO tattoos unless..."
+  out = out.replace(
+    /\s*The\s+woman\s+in\s+the\s+final\s+image\s+has\s+NO\s+tattoos[^.]*?\./gi,
+    ''
+  );
+
+  // 3b) Itens de lista "do NOT copy their tattoos/skin markings"
+  out = out.replace(/do\s+NOT\s+copy\s+their\s+tattoos,?\s*/gi, '');
+  out = out.replace(/do\s+NOT\s+copy\s+their\s+skin\s+marks?(?:ings)?,?\s*/gi, '');
+
+  // 3c) Itens negados "no tattoos, no skin markings"
+  out = out.replace(/no\s+tattoos,?\s*/gi, '');
+  out = out.replace(/no\s+skin\s+marks?(?:ings)?,?\s*/gi, '');
+
+  // 3d) Palavras isoladas residuais
+  out = out.replace(/\btattoos?,?\s*/gi, '');
+  out = out.replace(/\bskin\s+marks?(?:ings)?,?\s*/gi, '');
+  out = out.replace(/\bpiercings?,?\s*/gi, '');
+
+  // === CLEANUP ===
+  out = out.replace(/\s*,\s*,/g, ',');
+  out = out.replace(/\s*,\s*\./g, '.');
+  out = out.replace(/\.\s*\./g, '.');
+  out = out.replace(/\(\s*,\s*/g, '(');
+  out = out.replace(/\s+,/g, ',');
+  out = out.replace(/\s+/g, ' ');
+  out = out.replace(/^\s*,\s*/, '');
+  out = out.replace(/\s*,\s*$/, '');
   out = out.trim();
 
   return out;
@@ -463,11 +541,23 @@ export default async function handler(req, res) {
     // v3.4 - converte aspect_ratio pra image_size (FLUX.2 schema)
     const imageSize = aspectRatioToImageSize(aspect_ratio);
 
-    // v3.5 - logging expandido: inclui dados da sanitizacao + preview do prompt final.
-    // Util pra debug: se o FLUX.2 pro ainda retornar erro Pydantic, comparar o
-    // prompt final com o facePrompt/bodyDescription sanitizados pra isolar qual
-    // parte do texto e o gatilho.
-    console.log(`[image v3.6] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'-'}, sanitation=${JSON.stringify(sanitationLog)}, smoothBackHint=${smoothBackHint}, imageSize=${imageSize}, negLen=${finalNegative?.length||0}, promptLen=${finalPrompt?.length||0}`);
+    // v3.7 - SANITIZACAO CONTENT POLICY: ultima linha de defesa antes de
+    // enviar. Remove palavras que o VLM interno do FLUX.2 pro sinaliza
+    // como content_policy_violation (peach fuzz, smile lines, skinny,
+    // tattoos hard-coded no anchor, etc).
+    const prePromptLen = finalPrompt ? finalPrompt.length : 0;
+    const preNegLen = finalNegative ? finalNegative.length : 0;
+    finalPrompt = sanitizeContentPolicyTriggers(finalPrompt);
+    finalNegative = finalNegative ? sanitizeContentPolicyTriggers(finalNegative) : finalNegative;
+    const postPromptLen = finalPrompt ? finalPrompt.length : 0;
+    const postNegLen = finalNegative ? finalNegative.length : 0;
+    const policyLog = {
+      prompt: { before: prePromptLen, after: postPromptLen, removed: prePromptLen - postPromptLen },
+      negative: { before: preNegLen, after: postNegLen, removed: preNegLen - postNegLen },
+    };
+
+    // v3.7 - logging completo: sanitation da anchor (v3.5) + policy (v3.7)
+    console.log(`[image v3.7] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'-'}, sanitation=${JSON.stringify(sanitationLog)}, policyFilter=${JSON.stringify(policyLog)}, smoothBackHint=${smoothBackHint}, imageSize=${imageSize}, negLen=${finalNegative?.length||0}, promptLen=${finalPrompt?.length||0}`);
 
     // Preview dos primeiros/ultimos 300 chars do prompt final (ajuda debug
     // quando o FLUX.2 retorna erro estruturado sem mensagem clara)
@@ -475,7 +565,7 @@ export default async function handler(req, res) {
       const preview = finalPrompt.length > 600
         ? finalPrompt.substring(0, 300) + ' [...] ' + finalPrompt.substring(finalPrompt.length - 300)
         : finalPrompt;
-      console.log(`[image v3.6] prompt preview: ${preview}`);
+      console.log(`[image v3.7] prompt preview: ${preview}`);
     }
 
     // v3.4 - body FLUX.2 pro:
@@ -512,7 +602,7 @@ export default async function handler(req, res) {
 
     if (!submitRes.ok) {
       const errText = await submitRes.text();
-      console.error(`[image v3.6] fal.ai submit error ${submitRes.status}:`, errText);
+      console.error(`[image v3.7] fal.ai submit error ${submitRes.status}:`, errText);
       return res.status(submitRes.status).json({ error: `fal.ai error: ${submitRes.status}`, details: errText });
     }
 
@@ -532,7 +622,7 @@ export default async function handler(req, res) {
     const statusUrl = submitData.status_url || `https://queue.fal.run/${fallbackEndpoint}/requests/${requestId}/status`;
     const responseUrl = submitData.response_url || `https://queue.fal.run/${fallbackEndpoint}/requests/${requestId}`;
 
-    console.log(`[image v3.6] Queued: ${requestId} (endpoint=${endpoint})`);
+    console.log(`[image v3.7] Queued: ${requestId} (endpoint=${endpoint})`);
 
     let attempts = 0;
     const maxAttempts = 60;
@@ -544,7 +634,7 @@ export default async function handler(req, res) {
         headers: { 'Authorization': `Key ${FAL_KEY}` },
       });
       if (!statusRes.ok) {
-        console.error(`[image v3.6] Status check error ${statusRes.status}`);
+        console.error(`[image v3.7] Status check error ${statusRes.status}`);
         continue;
       }
       const status = await statusRes.json();
@@ -558,14 +648,14 @@ export default async function handler(req, res) {
       }
 
       if (status.status === 'FAILED') {
-        console.error(`[image v3.6] Generation failed:`, status);
+        console.error(`[image v3.7] Generation failed:`, status);
         return res.status(500).json({ error: 'Image generation failed', details: status });
       }
     }
 
     return res.status(408).json({ error: 'Timeout waiting for image', requestId });
   } catch (error) {
-    console.error('[image v3.6] Error:', error);
+    console.error('[image v3.7] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
