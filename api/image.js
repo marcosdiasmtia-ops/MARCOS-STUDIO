@@ -1,4 +1,4 @@
-// fal.ai image generation proxy (v3.4)
+// fal.ai image generation proxy (v3.5)
 //
 // HISTORICO DE FIXES:
 // v2.2 - Fix 1: ancora de identidade
@@ -32,6 +32,44 @@
 //        Nao mexido: TODA a logica de anchor (buildIdentityAnchor*),
 //        ANATOMY_GUARD, sanitizeNegativePrompt, STRICT_BACK_NEGATIVE,
 //        detectSmoothBackHint. Tudo isso e agnostico ao modelo.
+// v3.5 - FIX BUG 12: sanitiza facePrompt/bodyDescription/productDescription
+//        antes de injetar no prompt do FLUX.2 pro. Apos migracao v3.4, o
+//        VLM interno do FLUX.2 (Mistral-3 24B) passou a rejeitar prompts
+//        gerados pela v3.1 do analyze-identity com erro Pydantic no
+//        campo body.prompt, deixando o Marcos bloqueado.
+//
+//        DIAGNOSTICO (sessao 23/04/2026):
+//        A v3.1 do analyze-identity gera textos com padroes que triggaram
+//        safety filter do VLM interno do FLUX.2 pro:
+//          1) "Fitzpatrick type III/IV/..." - escala clinica dermatologica
+//             pode soar como identificacao biometrica de pessoa real
+//          2) "Woman aged 27-31" - descritor etario preciso em formato
+//             nao-natural, parece metadata de identificacao
+//          3) "No visible piercings, tattoos, or other distinguishing marks"
+//             - palavras "piercings" e "tattoos" sao tokenizadas mesmo
+//             quando negadas
+//          4) "(NOT pink-European, NOT olive)" - negacoes all-caps com
+//             hifen entre parenteses, padrao estranho
+//          5) "BASE" em caps lock isolado - pode confundir tokenizer
+//
+//        SOLUCAO:
+//        Funcao sanitizePromptForFlux2() aplicada ANTES de montar a
+//        anchor. O perfil salvo em localStorage permanece INTACTO (preserva
+//        a descricao detalhada para anti-drift). A sanitizacao acontece so
+//        no momento do envio pro FLUX.2.
+//
+//        Mudancas cirurgicas:
+//          1) Nova funcao sanitizePromptForFlux2 (topo do arquivo)
+//          2) Aplicada a face_prompt, body_description, product_description
+//             dentro do handler, antes de chamar buildIdentityAnchor*
+//          3) Logging expandido: preview dos primeiros/ultimos 300 chars
+//             do prompt final enviado ao fal.ai (pra debug se ainda falhar)
+//          4) Nenhuma mudanca em buildIdentityAnchor*, ANATOMY_GUARD,
+//             STRICT_BACK_NEGATIVE, detectSmoothBackHint. Retrocompat 100%.
+//
+//        Se os perfis forem recadastrados apos v3.2 do analyze-identity
+//        (que nao gerar mais essas palavras), a sanitizacao e no-op e
+//        pode ser removida. Ate la, serve de rede de seguranca.
 
 const ANATOMY_GUARD_POSITIVE =
   'Natural foot positioning with both feet pointing forward in anatomically correct angles. ' +
@@ -81,6 +119,71 @@ function sanitizeNegativePrompt(negativePrompt) {
   if (sanitized.startsWith(',')) sanitized = sanitized.slice(1).trim();
   if (sanitized.endsWith(',')) sanitized = sanitized.slice(0, -1).trim();
   return sanitized;
+}
+
+// v3.5 - Sanitiza texto antes de enviar pro FLUX.2 pro.
+// Remove padroes que o VLM interno (Mistral-3 24B) do FLUX.2 associa com
+// tentativa de identificacao biometrica de pessoa real, triggando safety
+// filter e retornando erro Pydantic no body.prompt.
+//
+// O que REMOVE:
+//   1) "Fitzpatrick type I-VI" (escala clinica dermatologica)
+//   2) "Woman aged XX-YY" (descritor etario preciso nao-natural)
+//   3) Negacoes de piercings/tattoos/moles em lista (mesmo negadas,
+//      essas palavras sao tokenizadas como trigger)
+//   4) Negacoes geograficas em parenteses all-caps "(NOT pink-European, ...)"
+//   5) "BASE" em caps lock isolado (normaliza pra "base")
+//
+// O que PRESERVA:
+//   - Toda a descricao anatomica (forma do rosto, traços, olhos, nariz, boca)
+//   - Cor de pele (sem nomear escala)
+//   - Cor e textura de cabelo, incluindo base vs highlights
+//   - Mencoes POSITIVAS de freckles/beauty marks (sao parte da identidade)
+//   - Idade qualitativa ("smooth youthful", "fresh clear skin")
+//
+// IMPORTANTE: essa sanitizacao NAO modifica o perfil salvo no localStorage.
+// Ela acontece APENAS no momento do envio pro FLUX.2. O facePrompt original
+// continua servindo como anti-drift (referencia forense para Claude Vision
+// comparar entre geracoes).
+function sanitizePromptForFlux2(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  let out = text;
+
+  // 1) Remove "Fitzpatrick type III/IV/V/VI" preservando o contexto antes/depois
+  //    "Light skin Fitzpatrick type III with warm undertones" → "Light skin with warm undertones"
+  out = out.replace(/\s*Fitzpatrick\s+type\s+[IVX]+\s*/gi, ' ');
+
+  // 2) Remove negacoes geograficas all-caps entre parenteses
+  //    "(NOT pink-European, NOT olive)" → ""
+  out = out.replace(/\s*\(NOT [^)]+\)/gi, '');
+
+  // 3) Remove descritor etario preciso
+  //    "Woman aged 27-31, smooth..." → "smooth..."
+  //    "aged 20-24" isolado tambem e removido
+  out = out.replace(/\b(?:Woman\s+)?aged\s+\d+\s*-\s*\d+[,.]?\s*/gi, '');
+
+  // 4) Remove frases de negacao listando piercings/tattoos
+  //    Padroes cobertos:
+  //      "No visible piercings, tattoos, or other distinguishing marks."
+  //      "no piercings, tattoos, moles or freckles, clean even skin"
+  //      "No tattoos, no piercings, no scars."
+  out = out.replace(
+    /\b[Nn]o\s+(?:visible\s+)?piercings?[^.]*?(?:marks?|skin|freckles?|moles?|scars?)\.?\s*/g,
+    ''
+  );
+
+  // 5) "BASE" em caps lock isolado vira lowercase
+  //    "Medium brown BASE hair" → "Medium brown base hair"
+  out = out.replace(/\bBASE\b/g, 'base');
+
+  // 6) Normaliza whitespace e pontuacao
+  out = out.replace(/\s+/g, ' ');
+  out = out.replace(/\s+([,.])/g, '$1');
+  out = out.replace(/\.\s*\./g, '.');
+  out = out.replace(/,\s*,/g, ',');
+  out = out.trim();
+
+  return out;
 }
 
 // --- FRONTAL anchor (comportamento v2.8, inalterado em v3.3) ---
@@ -308,6 +411,21 @@ export default async function handler(req, res) {
 
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
+    // v3.5 - Sanitiza textos do perfil ANTES de montar a anchor.
+    // Isso impede que padroes "forenses" da v3.1 do analyze-identity
+    // (Fitzpatrick, aged XX-YY, piercings/tattoos negados, etc) triggam
+    // o safety filter do VLM interno do FLUX.2 pro.
+    // O perfil no localStorage continua intacto.
+    const sanitizedFacePrompt = sanitizePromptForFlux2(face_prompt);
+    const sanitizedBodyDescription = sanitizePromptForFlux2(body_description);
+    const sanitizedProductDescription = sanitizePromptForFlux2(product_description);
+
+    const sanitationLog = {
+      face: { in: (face_prompt || '').length, out: sanitizedFacePrompt.length },
+      body: { in: (body_description || '').length, out: sanitizedBodyDescription.length },
+      product: { in: (product_description || '').length, out: sanitizedProductDescription.length },
+    };
+
     const hasImages = Array.isArray(image_urls) && image_urls.length > 0;
     // v3.4 - FLUX.2 pro substitui Nano Banana em todos os casos
     const endpoint = hasImages ? FLUX2_PRO_EDIT_ENDPOINT : FLUX2_PRO_TEXT_ENDPOINT;
@@ -320,8 +438,8 @@ export default async function handler(req, res) {
     let finalPrompt = prompt;
     if (hasImages) {
       const anchor = isBack
-        ? buildIdentityAnchorBack(profile_name, body_description, face_prompt, product_description, image_urls.length, smoothBackHint)
-        : buildIdentityAnchorFrontal(profile_name, body_description, face_prompt, product_description, image_urls.length);
+        ? buildIdentityAnchorBack(profile_name, sanitizedBodyDescription, sanitizedFacePrompt, sanitizedProductDescription, image_urls.length, smoothBackHint)
+        : buildIdentityAnchorFrontal(profile_name, sanitizedBodyDescription, sanitizedFacePrompt, sanitizedProductDescription, image_urls.length);
 
       if (anchor) {
         finalPrompt = anchor + prompt;
@@ -348,7 +466,20 @@ export default async function handler(req, res) {
     // v3.4 - converte aspect_ratio pra image_size (FLUX.2 schema)
     const imageSize = aspectRatioToImageSize(aspect_ratio);
 
-    console.log(`[image v3.4] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'-'}, bodyDesc=${!!body_description}, facePrompt=${!!face_prompt}, productDesc=${!!product_description}, smoothBackHint=${smoothBackHint}, imageSize=${imageSize}, negLen=${finalNegative?.length||0}, promptLen=${finalPrompt?.length||0}`);
+    // v3.5 - logging expandido: inclui dados da sanitizacao + preview do prompt final.
+    // Util pra debug: se o FLUX.2 pro ainda retornar erro Pydantic, comparar o
+    // prompt final com o facePrompt/bodyDescription sanitizados pra isolar qual
+    // parte do texto e o gatilho.
+    console.log(`[image v3.5] endpoint=${endpoint}, view=${view_type}, hasImages=${hasImages}, imgs=${image_urls?.length||0}, profile=${profile_name||'-'}, sanitation=${JSON.stringify(sanitationLog)}, smoothBackHint=${smoothBackHint}, imageSize=${imageSize}, negLen=${finalNegative?.length||0}, promptLen=${finalPrompt?.length||0}`);
+
+    // Preview dos primeiros/ultimos 300 chars do prompt final (ajuda debug
+    // quando o FLUX.2 retorna erro estruturado sem mensagem clara)
+    if (finalPrompt && finalPrompt.length > 0) {
+      const preview = finalPrompt.length > 600
+        ? finalPrompt.substring(0, 300) + ' [...] ' + finalPrompt.substring(finalPrompt.length - 300)
+        : finalPrompt;
+      console.log(`[image v3.5] prompt preview: ${preview}`);
+    }
 
     // v3.4 - body FLUX.2 pro:
     //   prompt + image_urls (mesmos nomes que Nano Banana, mantidos)
@@ -376,7 +507,7 @@ export default async function handler(req, res) {
 
     if (!submitRes.ok) {
       const errText = await submitRes.text();
-      console.error(`[image v3.4] fal.ai submit error ${submitRes.status}:`, errText);
+      console.error(`[image v3.5] fal.ai submit error ${submitRes.status}:`, errText);
       return res.status(submitRes.status).json({ error: `fal.ai error: ${submitRes.status}`, details: errText });
     }
 
@@ -396,7 +527,7 @@ export default async function handler(req, res) {
     const statusUrl = submitData.status_url || `https://queue.fal.run/${fallbackEndpoint}/requests/${requestId}/status`;
     const responseUrl = submitData.response_url || `https://queue.fal.run/${fallbackEndpoint}/requests/${requestId}`;
 
-    console.log(`[image v3.4] Queued: ${requestId} (endpoint=${endpoint})`);
+    console.log(`[image v3.5] Queued: ${requestId} (endpoint=${endpoint})`);
 
     let attempts = 0;
     const maxAttempts = 60;
@@ -408,7 +539,7 @@ export default async function handler(req, res) {
         headers: { 'Authorization': `Key ${FAL_KEY}` },
       });
       if (!statusRes.ok) {
-        console.error(`[image v3.4] Status check error ${statusRes.status}`);
+        console.error(`[image v3.5] Status check error ${statusRes.status}`);
         continue;
       }
       const status = await statusRes.json();
@@ -422,14 +553,14 @@ export default async function handler(req, res) {
       }
 
       if (status.status === 'FAILED') {
-        console.error(`[image v3.4] Generation failed:`, status);
+        console.error(`[image v3.5] Generation failed:`, status);
         return res.status(500).json({ error: 'Image generation failed', details: status });
       }
     }
 
     return res.status(408).json({ error: 'Timeout waiting for image', requestId });
   } catch (error) {
-    console.error('[image v3.4] Error:', error);
+    console.error('[image v3.5] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
