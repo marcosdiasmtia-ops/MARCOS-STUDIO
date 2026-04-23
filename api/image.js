@@ -495,7 +495,7 @@ export default async function handler(req, res) {
       image_size: imageSize,
       output_format: 'jpeg',
       num_images: 1,
-      safety_tolerance: '6',          // v3.6 - maximo permissivo (range 1-6)
+      safety_tolerance: '5',          // v3.6.1 - maximo permissivo (range 1-5, nao 1-6 como pensei antes)
       enable_safety_checker: false,   // v3.6 - desativa checker de output
     };
     if (hasImages) body.image_urls = image_urls;
