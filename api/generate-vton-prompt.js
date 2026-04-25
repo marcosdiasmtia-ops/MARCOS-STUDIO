@@ -206,7 +206,36 @@ REGRAS DE preenchimento:
 - "estimatedCost" = 0.30 se hasBack, senão 0.15.
 
 Se product.hasBackInterest=true, distribuir: pelo menos 1 roteiro com hasBack=true. Os outros, pode variar.
-Se product.hasBackInterest=false, todos os 3 roteiros com hasBack=false.`;
+Se product.hasBackInterest=false, todos os 3 roteiros com hasBack=false.
+
+═══════════════════════════════════════════════════════════
+FORMATO DE SAÍDA — CRÍTICO
+═══════════════════════════════════════════════════════════
+
+⚠️ Sua resposta DEVE ser EXCLUSIVAMENTE o JSON. Nada antes, nada depois.
+
+❌ NÃO escreva: "Com base na pesquisa..." antes do JSON
+❌ NÃO escreva: "Aqui estão os 3 roteiros:" antes do JSON
+❌ NÃO use markdown fences (\`\`\`json ou \`\`\`)
+❌ NÃO use a chave "Roteiros" com R maiúsculo — use "roteiros" com r minúsculo
+❌ NÃO escreva nenhuma observação após o JSON
+
+✅ A primeira linha da sua resposta DEVE começar com: {
+✅ A última linha da sua resposta DEVE terminar com: }
+✅ Use exatamente a chave "roteiros" (lowercase) no nível raiz
+
+Exemplo de início VÁLIDO da sua resposta:
+{
+  "roteiros": [
+    { "id": "roteiro_1", ...
+
+Exemplo de início INVÁLIDO da sua resposta:
+Com base na pesquisa, identifiquei os cenários...
+
+\`\`\`json
+{
+  "Roteiros": [
+    ...`;
 
     // User content — passa os dados do perfil + produto
     const userContent = `INPUT DO USUÁRIO:
@@ -282,16 +311,38 @@ TAREFA:
 
     let parsed;
     try {
-      const cleaned = finalText
-        .replace(/^```(?:json)?\s*/i, '')
-        .replace(/\s*```\s*$/i, '')
+      // Extração robusta: busca o primeiro { até o último } correspondente
+      // Isso lida com prosa antes do JSON, markdown fences, e variações de formato
+      let jsonText = finalText.trim();
+
+      // 1. Remove markdown fences se presentes
+      jsonText = jsonText
+        .replace(/```(?:json)?\s*/gi, '')
+        .replace(/\s*```\s*/g, '')
         .trim();
-      parsed = JSON.parse(cleaned);
+
+      // 2. Se ainda tem prosa antes do {, extrai do primeiro { até o último }
+      const firstBrace = jsonText.indexOf('{');
+      const lastBrace = jsonText.lastIndexOf('}');
+      if (firstBrace > 0 || lastBrace < jsonText.length - 1) {
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          jsonText = jsonText.substring(firstBrace, lastBrace + 1);
+        }
+      }
+
+      parsed = JSON.parse(jsonText);
+
+      // 3. Aceita "Roteiros" (R maiúsculo) ou "roteiros" — normaliza
+      if (parsed && parsed.Roteiros && !parsed.roteiros) {
+        parsed.roteiros = parsed.Roteiros;
+        delete parsed.Roteiros;
+      }
     } catch (parseErr) {
       console.error('[generate-vton-prompt] Failed to parse Claude output:', finalText.substring(0, 500));
       return res.status(500).json({
         error: 'Failed to parse roteiros JSON',
-        rawOutput: finalText.substring(0, 1000)
+        rawOutput: finalText.substring(0, 1000),
+        parseError: parseErr.message
       });
     }
 
