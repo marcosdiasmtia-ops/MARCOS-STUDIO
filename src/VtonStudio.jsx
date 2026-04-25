@@ -16,7 +16,6 @@
 
 import { useState, useEffect } from 'react';
 import {
-  fileToBase64,
   uploadToFal,
   analyzeFace,
   analyzeProductVton,
@@ -28,6 +27,59 @@ import {
   saveVtonProfile,
   deleteVtonProfile,
 } from './api.js';
+
+// ─────────────────────────────────────────────────────────────────
+// HELPER — Comprime imagem antes de mandar pra API
+// Resize automático pra max 1280px (mantém proporção) + JPEG quality 0.85
+// Resolve fotos grandes (>2MB ou dimensões > 2000px) que estouravam o
+// limite do Claude API (5MB base64 / dimensões altas).
+// ─────────────────────────────────────────────────────────────────
+async function compressImage(file, maxDim = 1280, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        // Calcula novas dimensões mantendo proporção
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        // Desenha em canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Exporta como JPEG comprimido
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        const base64 = dataUrl.split(',')[1];
+
+        resolve({
+          base64,
+          mimeType: 'image/jpeg',
+          preview: dataUrl,
+          originalWidth: img.naturalWidth,
+          originalHeight: img.naturalHeight,
+          finalWidth: width,
+          finalHeight: height,
+        });
+      };
+      img.onerror = () => reject(new Error('Falha ao carregar imagem'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('Falha ao ler arquivo'));
+    reader.readAsDataURL(file);
+  });
+}
 
 // Estágios da aba VTON
 const STAGE = {
@@ -88,7 +140,10 @@ export default function VtonStudio() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const data = await fileToBase64(file);
+      // Comprime pra max 1280px JPEG quality 0.85 (resolve foto grande)
+      const data = await compressImage(file, 1280, 0.85);
+      console.log('[VTON] compressed face:',
+        `${data.originalWidth}x${data.originalHeight} → ${data.finalWidth}x${data.finalHeight}`);
       setNewInfPhoto(data);
       setAnalyzeError(null);
       setNewInfAnalysis(null);
@@ -175,7 +230,10 @@ export default function VtonStudio() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const data = await fileToBase64(file);
+      // Comprime pra max 1280px JPEG quality 0.85
+      const data = await compressImage(file, 1280, 0.85);
+      console.log(`[VTON] compressed product ${side}:`,
+        `${data.originalWidth}x${data.originalHeight} → ${data.finalWidth}x${data.finalHeight}`);
       if (side === 'front') setProductFront(data);
       else setProductBack(data);
     } catch (err) {
