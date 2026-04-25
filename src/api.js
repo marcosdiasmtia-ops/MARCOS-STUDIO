@@ -1,4 +1,22 @@
-// API helper functions for all backend calls (v3.0 — dual-photo analyzeIdentity + facePrompt pipeline)
+// API helper functions for all backend calls (v4.0 — adds VTON helpers)
+//
+// CHANGELOG:
+// v3.0 — dual-photo analyzeIdentity + facePrompt pipeline (legacy/FLUX.2 pro)
+// v4.0 — adiciona 4 helpers VTON novos:
+//   - analyzeFace          → /api/analyze-face
+//   - analyzeProductVton   → /api/analyze-product-vton
+//   - generateVtonPrompt   → /api/generate-vton-prompt
+//   - generateVtonImage    → /api/generate-vton-image
+//
+// Adiciona também:
+//   - getVtonProfiles, saveVtonProfile, deleteVtonProfile (storage separado
+//     dos perfis legacy pra não interferir)
+//
+// MANTIDO INTACTO (v3.0):
+//   - callClaude, generateContent, searchTrends, uploadToFal
+//   - analyzeIdentity, analyzeProduct, generateImage, generateBackPrompt
+//   - generateVideo, checkVideoStatus, fileToBase64
+//   - getProfiles, saveProfile, deleteProfile (perfis legacy FLUX.2 pro)
 
 export async function callClaude(system, userMessage) {
   const res = await fetch('/api/generate', {
@@ -228,8 +246,9 @@ export function fileToBase64(file) {
   });
 }
 
-// ══════════ Profile storage (v2.4 — inclui facePrompt) ══════════
-// O perfil agora tem: { id, name, photo, bodyDescription, facePrompt, createdAt }
+// ══════════ Profile storage LEGACY (v2.4 — inclui facePrompt) ══════════
+// O perfil legacy tem: { id, name, photo, bodyDescription, facePrompt, createdAt }
+// Usado pela aba legacy FLUX.2 pro. NÃO MEXER.
 const PROFILES_KEY = 'ligia-ugc-profiles';
 
 export function getProfiles() {
@@ -256,5 +275,158 @@ export function saveProfile(profile) {
 export function deleteProfile(id) {
   const profiles = getProfiles().filter(p => p.id !== id);
   localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+  return profiles;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// VTON HELPERS (v4.0 — aba VTON nova com Nano Banana Pro pipeline)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Analisa close-up de rosto e retorna { hair, ageHint, vibe, signature }
+// pra cadastro VTON mínimo.
+export async function analyzeFace({ faceBase64, faceMimeType }) {
+  const res = await fetch('/api/analyze-face', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      faceBase64,
+      faceMimeType: faceMimeType || 'image/jpeg',
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('analyze-face response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao analisar rosto (${res.status}). Verifique os logs no Vercel.`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;  // { hair, ageHint, vibe, signature }
+}
+
+// Analisa frontal+costas do produto numa única chamada.
+// Retorna { frontDescription, backDescription, hasBackInterest, backReason }
+export async function analyzeProductVton({
+  frontBase64,
+  frontMimeType,
+  backBase64,
+  backMimeType,
+  productName,
+  productDescription,
+}) {
+  const res = await fetch('/api/analyze-product-vton', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      frontBase64,
+      frontMimeType: frontMimeType || 'image/jpeg',
+      backBase64,
+      backMimeType: backMimeType || 'image/jpeg',
+      productName,
+      productDescription,
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('analyze-product-vton response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao analisar produto VTON (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;  // { frontDescription, backDescription, hasBackInterest, backReason }
+}
+
+// Gera 3 roteiros UGC sugeridos via Claude + web_search dinâmico.
+// Cada roteiro vem etiquetado com poseType e custo previsto.
+export async function generateVtonPrompt({ influencer, product, preferredScene }) {
+  const res = await fetch('/api/generate-vton-prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      influencer,
+      product,
+      preferredScene,
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('generate-vton-prompt response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar roteiros VTON (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;  // { roteiros: [...] }
+}
+
+// Gera 1 imagem VTON com Nano Banana Pro (face + produto + prompt UGC).
+// Retorna { imageUrl, prompt, seed, requestId }
+export async function generateVtonImage({ facePhotoUrl, productPhotoUrl, prompt }) {
+  const res = await fetch('/api/generate-vton-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      facePhotoUrl,
+      productPhotoUrl,
+      prompt,
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('generate-vton-image response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar imagem VTON (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;  // { imageUrl, prompt, seed, requestId }
+}
+
+// ══════════ VTON Profile storage (v4.0 — separado do legacy) ══════════
+// O perfil VTON tem: { id, name, facePhoto, hair, ageHint, vibe, signature, bodyHint, createdAt }
+// Storage separado pra não interferir nos perfis legacy.
+const VTON_PROFILES_KEY = 'marcos-studio-vton-profiles';
+
+export function getVtonProfiles() {
+  try {
+    const stored = localStorage.getItem(VTON_PROFILES_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveVtonProfile(profile) {
+  const profiles = getVtonProfiles();
+  const idx = profiles.findIndex(p => p.id === profile.id);
+  if (idx >= 0) {
+    profiles[idx] = { ...profiles[idx], ...profile };
+  } else {
+    profiles.push({
+      ...profile,
+      id: profile.id || `vton_${Date.now()}`,
+      createdAt: profile.createdAt || new Date().toISOString(),
+    });
+  }
+  localStorage.setItem(VTON_PROFILES_KEY, JSON.stringify(profiles));
+  return profiles;
+}
+
+export function deleteVtonProfile(id) {
+  const profiles = getVtonProfiles().filter(p => p.id !== id);
+  localStorage.setItem(VTON_PROFILES_KEY, JSON.stringify(profiles));
   return profiles;
 }
