@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { getSystemPrompt, VIDEO_NUMBERS_RULES } from './systemPrompt';
 import { callClaude, generateContent, searchTrends, generateImage, generateBackPrompt, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles, analyzeProduct } from './api';
 import ProfileManager from './ProfileManager';
+import VtonStudio from './VtonStudio';
 import './styles.css';
 
 const VIDEO_TYPES = [
@@ -68,7 +69,7 @@ function Accordion({ title, icon, children, open: def = false }) {
   );
 }
 
-export default function App() {
+function LegacyApp() {
   const [page, setPage] = useState('form'); // form | loading | results | content
   // Na v2.2 não há mais Lígia hardcoded: o estado inicial é null até o usuário cadastrar/selecionar
   const [influencer, setInfluencer] = useState(() => getProfiles()[0] || null);
@@ -692,4 +693,87 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
   }
 
   return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v4.0 — Tab switcher: Legacy (FLUX.2 pro) vs VTON (Nano Banana Pro)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Wrapper que decide qual aba mostrar baseado em estado local.
+// A aba escolhida fica salva em localStorage pra sobreviver a reload.
+// Aba legacy continua intacta (LegacyApp). Aba VTON é o novo VtonStudio.
+
+const TAB_KEY = 'marcos-studio-active-tab';
+
+export default function App() {
+  const [tab, setTab] = useState(() => {
+    try {
+      return localStorage.getItem(TAB_KEY) || 'legacy';
+    } catch {
+      return 'legacy';
+    }
+  });
+
+  function switchTab(newTab) {
+    setTab(newTab);
+    try {
+      localStorage.setItem(TAB_KEY, newTab);
+    } catch {}
+  }
+
+  return (
+    <div className="app">
+      {/* Tab switcher fixo no topo */}
+      <div style={{
+        background: 'var(--bg2)',
+        borderBottom: '1px solid var(--bd)',
+        padding: '10px 20px',
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        position: 'sticky',
+        top: 0,
+        zIndex: 100,
+      }}>
+        <button
+          onClick={() => switchTab('legacy')}
+          style={{
+            background: tab === 'legacy' ? 'var(--gd)' : 'transparent',
+            border: tab === 'legacy' ? '1px solid var(--gb)' : '1px solid var(--bd)',
+            color: tab === 'legacy' ? 'var(--g)' : 'var(--t2)',
+            padding: '8px 18px',
+            borderRadius: 20,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            transition: 'all 0.2s',
+          }}
+        >
+          📸 Studio Legacy
+        </button>
+        <button
+          onClick={() => switchTab('vton')}
+          style={{
+            background: tab === 'vton' ? 'var(--gd)' : 'transparent',
+            border: tab === 'vton' ? '1px solid var(--gb)' : '1px solid var(--bd)',
+            color: tab === 'vton' ? 'var(--g)' : 'var(--t2)',
+            padding: '8px 18px',
+            borderRadius: 20,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            transition: 'all 0.2s',
+          }}
+        >
+          🎥 VTON
+        </button>
+      </div>
+
+      {/* Conteúdo da aba selecionada */}
+      {tab === 'legacy' ? <LegacyApp /> : <VtonStudio />}
+    </div>
+  );
 }
