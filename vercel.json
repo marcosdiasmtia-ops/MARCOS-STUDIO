@@ -11,6 +11,10 @@
     "api/analyze-product.js": { "maxDuration": 60 },
     "api/video.js": { "maxDuration": 300 },
     "api/upload.js": { "maxDuration": 30 },
-    "api/search.js": { "maxDuration": 60 }
+    "api/search.js": { "maxDuration": 60 },
+    "api/analyze-face.js": { "maxDuration": 30 },
+    "api/analyze-product-vton.js": { "maxDuration": 60 },
+    "api/generate-vton-prompt.js": { "maxDuration": 120 },
+    "api/generate-vton-image.js": { "maxDuration": 90 }
   }
 }
