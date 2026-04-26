@@ -364,7 +364,7 @@ export default function VtonStudio() {
 
         const videoSubmit = await generateVideo({
           engine: 'kling',
-          prompt: `Cinematic UGC fashion video, gentle natural movement, slight head turn, subtle expression change, 15 seconds, vertical format`,
+          prompt: r.videoPrompt || `Cinematic UGC fashion video, gentle natural movement, ending with the woman looking at camera with subtle natural smile, 15 seconds, vertical format`,
           image_url: frontalRes.imageUrl,
           element_image_url: backUrl,
           duration: 15,
@@ -690,9 +690,7 @@ export default function VtonStudio() {
         <div className="header">
           <h1 className="title">3 roteiros sugeridos</h1>
           <p className="subtitle">
-            {productAnalysis?.hasBackInterest
-              ? `Vale exibir costas: ${productAnalysis.backReason}`
-              : 'Esse produto não tem detalhe traseiro relevante — todos os roteiros são frontais'}
+            Cada roteiro descreve um vídeo completo de 15s — movimento + CTA fixo (olhar pra câmera com leve sorriso).
           </p>
         </div>
 
@@ -713,10 +711,46 @@ export default function VtonStudio() {
                 <h3 className="card-title">{r.sceneName}</h3>
                 <span className={selected ? 'pill' : ''}>{selected ? '✓ Selecionado' : '○ Marcar'}</span>
               </div>
-              <p style={{fontSize:14, color:'var(--t)', marginBottom:8}}>{r.description}</p>
+              <p style={{fontSize:14, color:'var(--t)', marginBottom:14}}>{r.description}</p>
+
+              {/* movementPlan — plano de movimento do vídeo */}
+              {r.movementPlan && (
+                <div style={{
+                  background: 'rgba(212,165,116,0.06)',
+                  border: '1px solid rgba(212,165,116,0.2)',
+                  borderRadius: 'var(--rs)',
+                  padding: 12,
+                  marginBottom: 12,
+                }}>
+                  <div style={{
+                    fontSize: 10,
+                    color: 'var(--g)',
+                    textTransform: 'uppercase',
+                    fontWeight: 700,
+                    letterSpacing: 1,
+                    marginBottom: 8,
+                  }}>🎬 Plano de movimento do vídeo</div>
+
+                  <div style={{display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, color: 'var(--t)'}}>
+                    <div>
+                      <span style={{color: 'var(--t2)', fontSize: 11, fontWeight: 700, marginRight: 6}}>INÍCIO ▸</span>
+                      {r.movementPlan.inicio}
+                    </div>
+                    <div>
+                      <span style={{color: 'var(--t2)', fontSize: 11, fontWeight: 700, marginRight: 6}}>MEIO ▸</span>
+                      {r.movementPlan.transicao}
+                    </div>
+                    <div>
+                      <span style={{color: 'var(--g)', fontSize: 11, fontWeight: 700, marginRight: 6}}>CTA FINAL ▸</span>
+                      {r.movementPlan.cta}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="pills-row">
-                <span className="pill">{r.poseType === 'frontal' ? 'Frontal' : 'Costas/3-4'}</span>
-                <span className="pill">{r.hasBack ? '2 imagens' : '1 imagem'}</span>
+                <span className="pill">{r.hasBack ? '🎬 Movimento c/ costas' : '📸 Frontal puro'}</span>
+                <span className="pill">{r.hasBack ? '2 imagens-chave' : '1 imagem CTA'}</span>
                 <span className="pill">${(r.estimatedCost + 1.68).toFixed(2)}</span>
               </div>
             </div>
