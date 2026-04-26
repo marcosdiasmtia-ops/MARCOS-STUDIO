@@ -430,3 +430,121 @@ export function deleteVtonProfile(id) {
   localStorage.setItem(VTON_PROFILES_KEY, JSON.stringify(profiles));
   return profiles;
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// VTON v2.0 HELPERS — pipeline com aprovação manual
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Esses helpers complementam os helpers VTON v1 (que continuam funcionando).
+// Implementam o fluxo de aprovação por etapa do VTON v2.0:
+//   1. generateVtonRoteiros (modo roteiros_only — sem prompts pesados)
+//   2. generateBackPromptVton (encadeamento serial após frontal aprovada)
+//   3. analyzeFidelity (auditoria opcional sob demanda)
+
+// Gera 3 ROTEIROS leves (sceneName, description, movementPlan, videoPrompt)
+// SEM gerar promptFrontal/promptBack ainda. Os prompts serão gerados depois,
+// sob demanda, conforme usuário aprovar etapa por etapa.
+//
+// Internamente chama o mesmo endpoint /api/generate-vton-prompt mas com
+// mode='roteiros_only' (que retorna schema mais leve).
+export async function generateVtonRoteiros({ influencer, product, preferredScene }) {
+  const res = await fetch('/api/generate-vton-prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      influencer,
+      product,
+      preferredScene,
+      mode: 'roteiros_only',
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('generate-vton-roteiros response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar roteiros VTON (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;  // { roteiros: [...] } — sem promptFrontal/promptBack
+}
+
+// Gera o promptBack OLHANDO a imagem frontal real via Claude Vision.
+// Garante consistência visual entre frontal e costas (cabelo, iluminação,
+// cenário, acessórios).
+//
+// Use este helper depois que o usuário APROVOU a imagem frontal.
+export async function generateBackPromptVton({
+  frontalImageUrl,
+  influencer,
+  product,
+  movementPlan,
+  sceneName,
+  videoPrompt,
+}) {
+  const res = await fetch('/api/generate-back-prompt-vton', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      frontalImageUrl,
+      influencer,
+      product,
+      movementPlan,
+      sceneName,
+      videoPrompt,
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('generate-back-prompt-vton response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar prompt de costas VTON (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;  // { promptBack, visualAnalysis }
+}
+
+// Audita FIDELIDADE da imagem gerada vs produto real (sob demanda).
+// Retorna checklist FACTUAL (✅ ok / ⚠️ divergente).
+//
+// Use este helper quando o usuário CLICAR "Analisar fidelidade" na UI.
+// NÃO chama automaticamente — Sugestão 3 da arquitetura v2.0 (rejeitada
+// pelo Marcos: análise é opcional).
+export async function analyzeFidelity({
+  generatedImageUrl,
+  productFrontPhotoUrl,
+  productBackPhotoUrl,
+  productAnalysis,
+  viewType,  // 'frontal' | 'back'
+}) {
+  const res = await fetch('/api/analyze-fidelity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      generatedImageUrl,
+      productFrontPhotoUrl,
+      productBackPhotoUrl,
+      productAnalysis,
+      viewType: viewType || 'frontal',
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('analyze-fidelity response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao analisar fidelidade (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;  // { overall, summary, checklist, criticalIssues, minorIssues }
+}
