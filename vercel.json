@@ -15,6 +15,8 @@
     "api/analyze-face.js": { "maxDuration": 30 },
     "api/analyze-product-vton.js": { "maxDuration": 60 },
     "api/generate-vton-prompt.js": { "maxDuration": 120 },
-    "api/generate-vton-image.js": { "maxDuration": 90 }
+    "api/generate-vton-image.js": { "maxDuration": 90 },
+    "api/generate-back-prompt-vton.js": { "maxDuration": 60 },
+    "api/analyze-fidelity.js": { "maxDuration": 60 }
   }
 }
