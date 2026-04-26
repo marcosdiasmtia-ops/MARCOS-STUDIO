@@ -1,34 +1,11 @@
-// api/generate-vton-prompt.js (v1.0 — coração do template UGC)
+// api/generate-vton-prompt.js (v1.2 — movementPlan + conversion-focused)
 //
-// Endpoint mais sofisticado do pipeline VTON. Recebe:
-//   - perfil da influencer cadastrada (hair, ageHint, vibe, signature, bodyHint)
-//   - descrições do produto (frontDescription, backDescription, hasBackInterest)
-//   - tipo de roteiro (frontal | back_3_4 | both)
-//   - opcionalmente, cenário "preferido" (caso Marcos queira variar)
-//
-// Faz:
-//   1. Claude Sonnet 4 com web_search_20250305 ativo
-//   2. Pesquisa cenários UGC trending pra TikTok Shop feminino
-//   3. Monta o prompt UGC seguindo o template-pai de 13 blocos
-//   4. Retorna 3 ROTEIROS DIFERENTES, cada um com cenário único
-//   5. Cada roteiro vem etiquetado com tipo de pose (frontal | back_3_4)
-//
-// Output (JSON):
-//   {
-//     roteiros: [
-//       {
-//         id: "roteiro_1",
-//         sceneName: "lisboa rooftop sunset",
-//         poseType: "frontal" | "back_3_4",
-//         hasBack: boolean,
-//         promptFrontal: "...",
-//         promptBack: "..." | null,
-//         estimatedCost: 0.30 | 0.15,
-//         description: "Pôr do sol em rooftop em Lisboa..."  // pt-br pra UI
-//       },
-//       ...
-//     ]
-//   }
+// MUDANÇAS v1.2 (vs v1.1):
+//   - Schema do roteiro ganha campo "movementPlan" (descreve o vídeo, não só a imagem)
+//   - hasBack DEFAULT = true em quase todos os roteiros (movimento valoriza)
+//   - CTA fixo: "olha pra câmera + leve sorriso natural" nos últimos 2-3s
+//   - Queries do web_search focadas em CONVERSÃO TikTok Shop, não estética
+//   - Schema retorna também videoPrompt (instrução pro Kling)
 //
 // PRINCÍPIOS — validados em 24/04/2026:
 //   - Template UGC com 13 blocos parametrizados (Regra 1)
@@ -36,7 +13,8 @@
 //   - Looking over shoulder INTENCIONAL é válido em back_3_4 (Regra 4)
 //   - Cabelo estratégico revela detalhes (Regra 5)
 //   - Anti-fenótipo hardcoded (Regra 15 do Notion)
-//   - Comprimento alvo: 1300-1500 chars
+//   - Movimentos NÃO travados — Claude decide via web_search dinâmico
+//   - CTA = ÚNICA regra hardcoded (regra de copywriting comercial)
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -50,9 +28,9 @@ export default async function handler(req, res) {
 
   try {
     const {
-      influencer,        // { name, hair, ageHint, vibe, signature, bodyHint }
-      product,           // { name, frontDescription, backDescription, hasBackInterest }
-      preferredScene     // string opcional, ex: "praia brasil" — se omitido, Claude decide
+      influencer,
+      product,
+      preferredScene
     } = req.body;
 
     if (!influencer?.hair?.color || !influencer?.hair?.texture || !influencer?.hair?.length) {
@@ -69,89 +47,129 @@ export default async function handler(req, res) {
       ? `\nO USUÁRIO PEDIU CENÁRIO ESPECÍFICO: "${preferredScene}". Use isso como um dos 3 roteiros (pode adaptar).\n`
       : '';
 
-    // System prompt completo — explica template-pai e regras de geração
-    const systemPrompt = `Você é o gerador de roteiros UGC do MARCOS-STUDIO, um sistema de geração de vídeos de afiliação para TikTok Shop. Sua tarefa é gerar 3 ROTEIROS DIFERENTES de imagens UGC autênticas pra uma influencer cadastrada usando um produto de moda.
+    const systemPrompt = `Você é o gerador de roteiros UGC do MARCOS-STUDIO, um sistema de geração de vídeos de afiliação para TikTok Shop. Sua tarefa é gerar 3 ROTEIROS DIFERENTES de VÍDEO UGC autêntico (não apenas imagens).
 
 ═══════════════════════════════════════════════════════════
-PIPELINE — Onde esses prompts serão usados
+DIFERENÇA CRÍTICA — Roteiro = VÍDEO completo, não imagem
 ═══════════════════════════════════════════════════════════
 
-Cada roteiro será executado pelo Nano Banana Pro (modelo de geração de imagem semântico) com:
-  - image 1 = facePhoto da influencer (close-up de rosto)
+Cada roteiro descreve um VÍDEO de 15 segundos completo, com:
+  - Movimento inicial (como o vídeo começa)
+  - Movimento de transição (revelando a peça)
+  - Movimento CTA final (FIXO — sempre o mesmo)
+
+Pra gerar o vídeo, o sistema precisa de IMAGENS-CHAVE:
+  - Imagem do INÍCIO do vídeo (frame 1) — pose inicial
+  - Imagem do CTA final (último frame) — pose CTA fixa
+  
+Cada IMAGEM-CHAVE é gerada pelo Nano Banana Pro com:
+  - image 1 = facePhoto da influencer (close-up)
   - image 2 = foto on-model do produto (frontal OU costas)
-  - prompt  = o texto UGC que você gera
+  - prompt  = template UGC de 13 blocos (você gera)
 
-A imagem gerada vai virar quadro estático. Depois passa pro Kling 3.0 que anima em vídeo de 15s.
-
-Os 3 roteiros devem ser DIFERENTES entre si:
-  - Cenários DIFERENTES (Lisboa, praia BR, café Paris, etc)
-  - Poses/ações DIFERENTES (em pé, encostada, andando, sentada)
-  - Hora do dia / iluminação DIFERENTES (sunset, noon, blue hour)
-
-Se o produto tem hasBackInterest=true, **pelo menos 1 dos 3 roteiros deve ser back_3_4** (mostra costas/3-4 da peça pra valorizar detalhes traseiros). Os outros podem ser frontais.
-
-Se hasBackInterest=false, os 3 roteiros são frontais.
+Depois, o Kling 3.0 anima usando AS IMAGENS-CHAVE + um videoPrompt
+descrevendo o movimento entre elas.
 
 ═══════════════════════════════════════════════════════════
-WEB SEARCH — Use para buscar cenários trending
+PIPELINE DE CADA ROTEIRO
 ═══════════════════════════════════════════════════════════
 
-ANTES de escrever os 3 roteiros, USE web_search com queries como:
-  - "TikTok Shop fashion content scenarios trending 2026"
-  - "best UGC backgrounds women fashion videos"
-  - "popular travel locations TikTok fashion influencer"
-  - "Instagram fashion photo location ideas"
+CASO A — Roteiro com movimento que ENVOLVE costas/3-4 (RECOMENDADO):
+  1. Gera imagem inicial (pose costas ou 3-4) com Nano Banana Pro 
+     usando foto frontal OU costas do produto
+  2. Gera imagem CTA final (frontal, olhando pra câmera, sorriso) 
+     com Nano Banana Pro usando foto frontal do produto
+  3. Kling anima do início até o CTA = vídeo de 15s
+  → hasBack = true ($0,30 em imagens + $1,68 Kling = $1,98 total)
 
-Use isso pra buscar 3 cenários DIFERENTES e ATUAIS que estão performando bem em conteúdo de moda feminina no TikTok Shop. Pode ser:
-  - Cidades icônicas (Lisboa, Paris, NYC, Tokyo, Santorini)
-  - Cenários naturais (praia, vinhedo, campo de flores, montanha)
-  - Espaços urbanos (rooftop, café, metrô, festival)
-  - Apartamentos minimalistas estilo Pinterest
-  - Locações exóticas
+CASO B — Roteiro frontal puro (raro, só em peças triviais):
+  1. Gera 1 imagem CTA frontal
+  2. Kling anima movimento pequeno (caminhada, olhar) = vídeo de 15s
+  → hasBack = false ($0,15 em imagens + $1,68 Kling = $1,83 total)
 
-NÃO repita os mesmos cenários todo dia. Cada chamada deve buscar atualizações.
+REGRA: PREFERIR CASO A (hasBack=true) na MAIORIA dos roteiros.
+Movimento de costas/3-4 valoriza qualquer peça em vídeo, mesmo
+peças "simples". Apenas use CASO B se o produto for muito básico
+e o movimento extra não agregar valor.
+
+═══════════════════════════════════════════════════════════
+WEB SEARCH — FOCO EM CONVERSÃO COMERCIAL
+═══════════════════════════════════════════════════════════
+
+ANTES de escrever os 3 roteiros, USE web_search com queries 
+focadas em CONVERSÃO/VENDAS, não estética turística:
+
+✅ Queries CERTAS (sobre o que VENDE):
+  - "best video movements TikTok Shop fashion conversion"
+  - "what makes fashion videos sell TikTok Shop 2026"
+  - "highest converting UGC fashion movements women"
+  - "movements that valorize clothing in video commerce"
+  - "fashion try-on video patterns highest CTR TikTok"
+
+❌ Queries ERRADAS (sobre estética turística):
+  - "trending travel destinations" (turismo, não venda)
+  - "popular Instagram locations" (estética, não conversão)
+  - "best UGC backgrounds" (cenário, não movimento)
+
+Use até 4 web_searches. O objetivo é descobrir:
+  1. Que TIPOS DE MOVIMENTO performam em fashion TikTok Shop hoje
+  2. Que CENÁRIOS estão convertendo mais (não só "bonitos")
+  3. Padrões específicos pro tipo de produto que está sendo vendido
+
+═══════════════════════════════════════════════════════════
+CTA FINAL — REGRA FIXA (NÃO MUDAR)
+═══════════════════════════════════════════════════════════
+
+Os ÚLTIMOS 2-3 SEGUNDOS de TODO vídeo terminam com:
+  → Influencer olhando pra câmera com leve sorriso natural
+
+Esse é o CTA visual padrão do MARCOS-STUDIO. Não varia.
+
+A IMAGEM CTA final é gerada SEMPRE com:
+  - Pose: frontal, olhando pra câmera
+  - Expressão: leve sorriso natural, gentle confident
+  - Mãos: relaxadas ou com 1 ação sutil (segurar bolsa, ajustar peça)
+
+O promptFrontal de cada roteiro é EXATAMENTE essa imagem CTA final.
 
 ═══════════════════════════════════════════════════════════
 TEMPLATE-PAI UGC (13 blocos) — siga exatamente
 ═══════════════════════════════════════════════════════════
 
-Cada prompt UGC tem 13 blocos. Comprimento alvo: 1300-1500 caracteres.
+Cada prompt UGC (frontal ou costas) tem 13 blocos. Comprimento alvo: 1300-1500 caracteres.
 
 1. POSE_DIRECTIVE — abre o prompt com a pose
-   FRONTAL: "Woman standing facing camera in [SCENE], weight relaxed on one leg, [POSITION DETAILS]"
+   FRONTAL CTA: "Woman standing facing camera in [SCENE], gently confident posture, looking directly at camera with leve sorriso natural"
    BACK_3_4: "Woman standing with back mostly toward camera in [SCENE], torso and head turned smoothly to the [SIDE] to look over her [SIDE] shoulder directly at camera with poised elegant expression"
+   COSTAS PURA: "Woman standing with back fully toward camera in [SCENE], strict rear view, no face visible"
 
 2. BODY_HINT (opcional, só se influencer.bodyHint != null)
    "[bodyHint] build, natural feminine proportions"
 
 3. HANDS_ACTION — ação concreta de mãos
-   FRONTAL exemplos: "one hand resting lightly on a [SURFACE], the other holding [OBJECT]"
+   FRONTAL CTA exemplos: "one hand resting on waist, the other holding a small handbag at her side"
    BACK_3_4 exemplos: "right hand gently touching the base of her neck, left hand holding [OBJECT] by her side"
 
 4. EXPRESSION
-   FRONTAL: "gentle natural smile toward camera as if a friend just took the photo"
+   FRONTAL CTA (FIXO): "leve sorriso natural, gentle confident expression looking directly at camera"
    BACK_3_4: "poised elegant expression"
+   COSTAS PURA: omitir bloco (sem rosto visível)
 
 5. OUTFIT (FIXO — não inventar)
    "wearing the outfit from reference image"
 
 6. SHOES — coerente com o cenário
-   "[shoes type] [color]" — ex: "nude pointed-toe slingback heels", "white sneakers", "leather sandals"
 
 7. HAIR — VEM DO PERFIL DA INFLUENCER
    "[texture] [color] hair [styling]"
-   FRONTAL styling: "loose with natural movement falling past shoulders catching [LIGHT]"
-   BACK_3_4 styling: "loose falling over the [OPPOSITE_SIDE] shoulder revealing the back of the top and exposing shoulder and upper back"
-   IMPORTANTE: hair styling em back_3_4 sempre cai no lado OPOSTO do giro pra revelar costas
+   FRONTAL CTA: "loose with natural movement falling past shoulders"
+   BACK_3_4 styling: "loose falling over the [OPPOSITE_SIDE] shoulder revealing the back of the top"
 
 8. ACCESSORIES — coerente com vibe + cenário
-   "small [TYPE] earrings, thin delicate [TYPE] necklace, [BAG]"
 
 9. SCENE_PARAGRAPH — descrição rica do cenário (60-100 palavras)
-   Detalhar: vista, elementos arquitetônicos, paisagem natural, distintivos, hora
 
 10. LIGHTING — coerente com hora do dia
-    "[golden hour | overcast | blue hour | midday | morning] lighting, [warm/cool] [glow/light], [soft/long] shadows"
 
 11. CAMERA (FIXO)
     "shot with static tripod at eye level, 50mm equivalent focal length, photographed with iPhone 15 Pro, f/1.9 aperture, soft creamy bokeh"
@@ -178,19 +196,29 @@ NUNCA INCLUA palavras de fenótipo descritivo direto:
 OUTPUT — formato exato
 ═══════════════════════════════════════════════════════════
 
-Retorne APENAS um JSON válido (sem markdown, sem prose). Schema:
+Schema completo:
 
 {
   "roteiros": [
     {
       "id": "roteiro_1",
-      "sceneName": "Lisbon rooftop sunset",
-      "poseType": "frontal" | "back_3_4",
+      "sceneName": "nome curto descritivo do cenário em pt-br",
+      "description": "Descrição em português brasileiro (1-2 frases) descrevendo O VÍDEO COMPLETO (cenário + movimento + CTA), pra UI do Marcos",
+      
+      "movementPlan": {
+        "inicio": "descrição em pt-br do movimento inicial do vídeo (1-2 frases)",
+        "transicao": "descrição em pt-br do movimento de transição/meio (1-2 frases)",
+        "cta": "olha para a câmera com leve sorriso natural"
+      },
+      
       "hasBack": true | false,
-      "promptFrontal": "Woman standing facing camera...",
-      "promptBack": null | "Woman standing with back mostly toward camera...",
       "estimatedCost": 0.30 | 0.15,
-      "description": "Descrição curta em português brasileiro (1-2 frases) pra UI do Marcos"
+      
+      "promptFrontal": "Template UGC de 13 blocos pra IMAGEM CTA FINAL (frontal, olhando pra câmera, sorriso natural)",
+      
+      "promptBack": null | "Template UGC de 13 blocos pra IMAGEM INICIAL DO VÍDEO (costas ou 3-4 conforme movementPlan.inicio)",
+      
+      "videoPrompt": "Instrução em INGLÊS pro Kling 3.0 descrevendo o movimento completo do vídeo, do frame inicial até o CTA. ~80-150 palavras. Exemplo: 'Camera static. Woman starts in [pose inicial], slowly [transição]. At the end, she [CTA fixo]. Smooth natural movement, gentle pace, fashion video style.'"
     },
     { "id": "roteiro_2", ... },
     { "id": "roteiro_3", ... }
@@ -198,15 +226,14 @@ Retorne APENAS um JSON válido (sem markdown, sem prose). Schema:
 }
 
 REGRAS DE preenchimento:
-- "poseType" = "back_3_4" SE for um roteiro que mostra costas/3-4 (envolve a pose de costas).
-- "hasBack" = true quando o roteiro vai gerar imagem frontal E também imagem de costas (custa $0,30).
-  hasBack = false quando o roteiro só gera frontal (custa $0,15).
-- "promptFrontal" = sempre obrigatório.
-- "promptBack" = null se hasBack=false. Se hasBack=true, é o prompt UGC pra costas (mesmo cenário, pose back_3_4).
+- "hasBack" = true (RECOMENDADO na maioria) quando o vídeo envolve movimento de costas/3-4 (mais valorizador). 
+  hasBack = false só em casos onde o produto é trivial e movimento de costas não agrega.
+- "promptFrontal" = sempre obrigatório, é a IMAGEM CTA FINAL (frontal, olha pra câmera + sorriso).
+- "promptBack" = null se hasBack=false. Se hasBack=true, é a IMAGEM INICIAL DO VÍDEO (costas pura ou 3-4 conforme movementPlan).
 - "estimatedCost" = 0.30 se hasBack, senão 0.15.
-
-Se product.hasBackInterest=true, distribuir: pelo menos 1 roteiro com hasBack=true. Os outros, pode variar.
-Se product.hasBackInterest=false, todos os 3 roteiros com hasBack=false.
+- "videoPrompt" = sempre obrigatório, descreve movimento que o Kling vai animar entre as imagens-chave.
+- "movementPlan" = sempre obrigatório, é o plano em pt-br do vídeo (mostrado ao usuário antes de gerar).
+- "movementPlan.cta" = SEMPRE "olha para a câmera com leve sorriso natural" (FIXO).
 
 ═══════════════════════════════════════════════════════════
 FORMATO DE SAÍDA — CRÍTICO
@@ -222,22 +249,8 @@ FORMATO DE SAÍDA — CRÍTICO
 
 ✅ A primeira linha da sua resposta DEVE começar com: {
 ✅ A última linha da sua resposta DEVE terminar com: }
-✅ Use exatamente a chave "roteiros" (lowercase) no nível raiz
+✅ Use exatamente a chave "roteiros" (lowercase) no nível raiz`;
 
-Exemplo de início VÁLIDO da sua resposta:
-{
-  "roteiros": [
-    { "id": "roteiro_1", ...
-
-Exemplo de início INVÁLIDO da sua resposta:
-Com base na pesquisa, identifiquei os cenários...
-
-\`\`\`json
-{
-  "Roteiros": [
-    ...`;
-
-    // User content — passa os dados do perfil + produto
     const userContent = `INPUT DO USUÁRIO:
 
 INFLUENCER CADASTRADA:
@@ -259,11 +272,15 @@ PRODUTO:
 ${sceneHint}
 
 TAREFA:
-1. Use web_search pra buscar 3 cenários TRENDING pra UGC TikTok Shop feminino
-2. Gere 3 ROTEIROS diferentes, seguindo o template-pai de 13 blocos
-3. Cada roteiro com cenário, pose, e iluminação ÚNICOS
-4. ${product.hasBackInterest ? 'Pelo menos 1 dos 3 roteiros deve ter hasBack=true' : 'Todos os 3 roteiros com hasBack=false'}
-5. Retorne APENAS o JSON conforme schema definido`;
+1. Use web_search com queries focadas em CONVERSÃO TikTok Shop fashion (não turismo)
+2. Descubra que MOVIMENTOS valorizam o tipo específico desse produto
+3. Descubra que CENÁRIOS estão convertendo bem agora
+4. Gere 3 ROTEIROS de VÍDEO diferentes (não imagens estáticas)
+5. PREFIRA hasBack=true na maioria (movimento valoriza)
+6. CTA final SEMPRE fixo: "olha para a câmera com leve sorriso natural"
+7. Cada roteiro deve ter: cenário + movimento inicial + transição + CTA fixo
+8. Cada roteiro inclui: promptFrontal (CTA), promptBack (inicial se hasBack), videoPrompt (Kling), movementPlan (pt-br)
+9. Retorne APENAS o JSON conforme schema definido`;
 
     const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -299,8 +316,6 @@ TAREFA:
     }
 
     const claudeData = await claudeResponse.json();
-
-    // Extrai o último bloco de texto (depois das tool_use de web_search)
     const textBlocks = (claudeData?.content || []).filter(b => b.type === 'text');
     const finalText = textBlocks.length > 0 ? textBlocks[textBlocks.length - 1].text : '';
 
@@ -311,17 +326,13 @@ TAREFA:
 
     let parsed;
     try {
-      // Extração robusta: busca o primeiro { até o último } correspondente
-      // Isso lida com prosa antes do JSON, markdown fences, e variações de formato
       let jsonText = finalText.trim();
 
-      // 1. Remove markdown fences se presentes
       jsonText = jsonText
         .replace(/```(?:json)?\s*/gi, '')
         .replace(/\s*```\s*/g, '')
         .trim();
 
-      // 2. Se ainda tem prosa antes do {, extrai do primeiro { até o último }
       const firstBrace = jsonText.indexOf('{');
       const lastBrace = jsonText.lastIndexOf('}');
       if (firstBrace > 0 || lastBrace < jsonText.length - 1) {
@@ -332,7 +343,6 @@ TAREFA:
 
       parsed = JSON.parse(jsonText);
 
-      // 3. Aceita "Roteiros" (R maiúsculo) ou "roteiros" — normaliza
       if (parsed && parsed.Roteiros && !parsed.roteiros) {
         parsed.roteiros = parsed.Roteiros;
         delete parsed.Roteiros;
@@ -346,7 +356,6 @@ TAREFA:
       });
     }
 
-    // Validação leve
     if (!Array.isArray(parsed?.roteiros) || parsed.roteiros.length !== 3) {
       return res.status(500).json({
         error: 'Expected exactly 3 roteiros',
@@ -354,11 +363,34 @@ TAREFA:
       });
     }
 
+    // Validação leve do schema novo (v1.2)
     for (let i = 0; i < parsed.roteiros.length; i++) {
       const r = parsed.roteiros[i];
-      if (!r.id || !r.sceneName || !r.poseType || typeof r.hasBack !== 'boolean' || !r.promptFrontal || !r.description) {
+
+      if (!r.id || !r.sceneName || !r.description) {
         return res.status(500).json({
-          error: `Roteiro ${i + 1} has missing required fields`,
+          error: `Roteiro ${i + 1} has missing required fields (id/sceneName/description)`,
+          rawOutput: r
+        });
+      }
+
+      if (!r.movementPlan?.inicio || !r.movementPlan?.transicao || !r.movementPlan?.cta) {
+        return res.status(500).json({
+          error: `Roteiro ${i + 1} has incomplete movementPlan (need inicio/transicao/cta)`,
+          rawOutput: r
+        });
+      }
+
+      if (typeof r.hasBack !== 'boolean') {
+        return res.status(500).json({
+          error: `Roteiro ${i + 1} has invalid hasBack`,
+          rawOutput: r
+        });
+      }
+
+      if (!r.promptFrontal) {
+        return res.status(500).json({
+          error: `Roteiro ${i + 1} missing promptFrontal (CTA image)`,
           rawOutput: r
         });
       }
@@ -368,13 +400,23 @@ TAREFA:
           rawOutput: r
         });
       }
+      if (!r.videoPrompt) {
+        return res.status(500).json({
+          error: `Roteiro ${i + 1} missing videoPrompt (Kling instruction)`,
+          rawOutput: r
+        });
+      }
+
       // Garantir consistência de custo
       r.estimatedCost = r.hasBack ? 0.30 : 0.15;
+
+      // Garantir CTA fixo (proteção contra Claude desviar do padrão)
+      r.movementPlan.cta = 'olha para a câmera com leve sorriso natural';
     }
 
     console.log(
       '[generate-vton-prompt] OK:',
-      parsed.roteiros.map(r => `${r.id}=${r.sceneName} (${r.poseType}, hasBack=${r.hasBack})`).join(' | ')
+      parsed.roteiros.map(r => `${r.id}=${r.sceneName} (hasBack=${r.hasBack})`).join(' | ')
     );
     return res.status(200).json(parsed);
 
