@@ -714,7 +714,7 @@ export default function VtonStudio() {
 
       let videoUrl = null;
       if (videoSubmit.requestId) {
-        const maxPolls = 150;  // 150 × 3s = 450s = 7,5 min (era 90 = 4,5 min, insuficiente)
+        const maxPolls = 150;  // 150 × 3s = 450s = 7,5 min
         for (let p = 0; p < maxPolls; p++) {
           await new Promise(r => setTimeout(r, 3000));
           const status = await checkVideoStatus(
@@ -723,6 +723,20 @@ export default function VtonStudio() {
             videoSubmit.statusUrl,
             videoSubmit.responseUrl
           );
+
+          // Decodificação correta — fal.ai retorna { status, result: { video: { url } } }
+          if (status?.status === 'COMPLETED') {
+            const url = status?.result?.video?.url || status?.video?.url;
+            if (url) {
+              videoUrl = url;
+              break;
+            }
+          }
+          // Compat com formato sem campo "status" (fallback)
+          if (status?.result?.video?.url) {
+            videoUrl = status.result.video.url;
+            break;
+          }
           if (status?.video?.url) {
             videoUrl = status.video.url;
             break;
@@ -732,6 +746,8 @@ export default function VtonStudio() {
           }
           setActionStatus(`Vídeo em progresso (${(p + 1) * 3}s de até 450s)...`);
         }
+      } else if (videoSubmit?.result?.video?.url) {
+        videoUrl = videoSubmit.result.video.url;
       } else if (videoSubmit?.video?.url) {
         videoUrl = videoSubmit.video.url;
       }
