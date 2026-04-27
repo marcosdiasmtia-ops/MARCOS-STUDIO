@@ -714,7 +714,7 @@ export default function VtonStudio() {
 
       let videoUrl = null;
       if (videoSubmit.requestId) {
-        const maxPolls = 90;
+        const maxPolls = 150;  // 150 × 3s = 450s = 7,5 min (era 90 = 4,5 min, insuficiente)
         for (let p = 0; p < maxPolls; p++) {
           await new Promise(r => setTimeout(r, 3000));
           const status = await checkVideoStatus(
@@ -730,7 +730,7 @@ export default function VtonStudio() {
           if (status?.status === 'FAILED' || status?.status === 'ERROR') {
             throw new Error(`Vídeo falhou: ${JSON.stringify(status).substring(0, 200)}`);
           }
-          setActionStatus(`Vídeo em progresso (${(p + 1) * 3}s de até 270s)...`);
+          setActionStatus(`Vídeo em progresso (${(p + 1) * 3}s de até 450s)...`);
         }
       } else if (videoSubmit?.video?.url) {
         videoUrl = videoSubmit.video.url;
