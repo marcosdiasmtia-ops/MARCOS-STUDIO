@@ -1,21 +1,42 @@
-// src/VtonStudio.jsx (v2.0 — pipeline de aprovação manual)
+// src/VtonStudio.jsx (v2.3 — UX upgrades + bugfixes + estágio PROMPT_VIDEO)
 //
-// MUDANÇAS v2.0 (vs v1.2):
-//   - Pipeline de aprovação manual em CADA etapa (não mais batch)
-//   - Encadeamento serial: gera frontal → aprova → gera prompt costas
-//     OLHANDO a frontal real → aprova → vídeo
-//   - 2 opções por imagem: gerar via Nano Banana OU anexar externa
-//   - Análise de fidelidade OPCIONAL (sob demanda do usuário)
-//   - Histórico de tentativas (refazer prompt N vezes)
-//   - Barra superior fixa com custo cumulativo + progresso
-//   - Roteiros 2 e 3 oferecidos APÓS finalizar o roteiro 1
+// MUDANÇAS v2.3 (vs v2.2):
+//   TÓPICO C — Foto produto em 9:16:
+//     - className="upload-area" trocado por "upload-area-9-16" nos 2 uploads
+//       de produto (frontal e costas) no STAGE.PRODUCT_UPLOAD
+//   TÓPICO D — Botão lento na seleção de roteiro:
+//     - Uploads paralelizados via Promise.all (3 fotos sobem ao mesmo tempo)
+//     - Overlay de loading agora visível na tela de roteiros (era invisível)
+//   TÓPICO E — Botão "Preparar pra gerar fora":
+//     - Novo botão "🚀 Preparar pra gerar fora" nas telas PROMPT_FRONTAL,
+//       PROMPT_BACK e novo PROMPT_VIDEO. Copia o prompt pro clipboard
+//       + abre 3 abas com as imagens de referência (face + frontal + back)
+//   TÓPICO F — Anexar imagem em 9:16 + validação:
+//     - className="upload-area" → "upload-area-9-16" nos 2 anexar externos
+//     - handleAttachFrontalExternal/Back agora valida proporção e mostra
+//       confirm() se diferir de 9:16 (tolerância ±10%)
+//   TÓPICO J — Novo estágio PROMPT_VIDEO:
+//     - Inserido entre IMAGE_BACK_REVIEW e GENERATING_VIDEO
+//     - Mostra videoPrompt (editável) + 2 opções:
+//         1. "🤖 Gerar via Kling 3.0 · $1,68" (caminho atual automático)
+//         2. "✅ Já gerei fora · concluir" (copia prompt + abre tabs +
+//            registra entrada source='external' no allVideos)
+//     - VIDEO_DONE adapta layout conforme source (kling_auto vs external)
+//     - ProgressBar passa de "/6" para "/7" pra refletir nova etapa
 //
-// PRINCÍPIOS:
-//   - Aprovação humana evita desperdício ($1,68 Kling não é gerado se
-//     imagens não estiverem boas)
-//   - Modo automático (Nano Banana) usa MESMO encadeamento serial
-//   - Estilo visual idêntico ao legacy (DM Sans, paleta dourada)
+// MUDANÇAS v2.0-v2.2 (mantidas):
+//   - Pipeline de aprovação manual em CADA etapa
+//   - Encadeamento serial frontal → costas
+//   - 2 opções por imagem (Nano Banana ou anexar externa)
+//   - Análise de fidelidade OPCIONAL
+//   - Histórico de tentativas
+//   - Decodificação resiliente de status do Kling (3 níveis fallback)
+//   - Timeout 7,5min pro polling do Kling
+//
+// PRINCÍPIOS (mantidos):
+//   - Aprovação humana evita desperdício
 //   - Multi-influencer agnóstico (Regra 15 do Notion)
+//   - Estilo visual idêntico ao legacy (DM Sans, paleta dourada)
 
 import { useState, useEffect } from 'react';
 import {
@@ -76,7 +97,73 @@ async function compressImage(file, maxDim = 1280, quality = 0.85) {
   });
 }
 
-// Estágios do fluxo VTON v2.0
+// 🆕 v2.3 — Helper de validação de proporção 9:16 (tópico F)
+// Lê o arquivo, mede dimensões, retorna {ok, width, height, ratio} sem subir.
+// Tolerância de ±10% (ratio 9/16 ≈ 0.5625; aceita entre 0.506 e 0.619).
+async function checkAspectRatio(file, targetRatio = 9 / 16, tolerance = 0.1) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const ratio = img.naturalWidth / img.naturalHeight;
+        const lower = targetRatio * (1 - tolerance);
+        const upper = targetRatio * (1 + tolerance);
+        const ok = ratio >= lower && ratio <= upper;
+        resolve({
+          ok,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          ratio,
+        });
+      };
+      img.onerror = () => resolve({ ok: true, width: 0, height: 0, ratio: 0 });  // se não conseguiu carregar, deixa passar
+      img.src = e.target.result;
+    };
+    reader.onerror = () => resolve({ ok: true, width: 0, height: 0, ratio: 0 });
+    reader.readAsDataURL(file);
+  });
+}
+
+// 🆕 v2.3 — Reduz nome de aproximações comuns para apresentar ao usuário (4:3, 1:1, 16:9, etc)
+function ratioToHumanLabel(ratio) {
+  if (!ratio) return '?';
+  const candidates = [
+    { r: 9 / 16, label: '9:16 (vertical TikTok)' },
+    { r: 1, label: '1:1 (quadrado)' },
+    { r: 4 / 3, label: '4:3' },
+    { r: 3 / 4, label: '3:4' },
+    { r: 16 / 9, label: '16:9 (horizontal)' },
+    { r: 2 / 3, label: '2:3' },
+    { r: 3 / 2, label: '3:2' },
+  ];
+  let best = candidates[0];
+  let bestDiff = Math.abs(candidates[0].r - ratio);
+  for (const c of candidates) {
+    const d = Math.abs(c.r - ratio);
+    if (d < bestDiff) { bestDiff = d; best = c; }
+  }
+  return best.label;
+}
+
+// 🆕 v2.3 — Helper que copia texto pro clipboard + abre N URLs em novas abas (tópico E e J)
+// IMPORTANTE: chamado SINCRONAMENTE dentro de onClick pra evitar pop-up blocker.
+function copyAndOpenTabs(text, urls) {
+  // Tenta copiar (pode falhar silenciosamente em browsers antigos — não bloqueia)
+  try {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  } catch (e) {
+    // ignora erro de clipboard, segue abrindo as tabs
+  }
+  // Abre cada URL em nova aba
+  for (const u of urls) {
+    if (u) window.open(u, '_blank', 'noopener');
+  }
+}
+
+// Estágios do fluxo VTON v2.3
 const STAGE = {
   INFLUENCER_LIST:      'influencer_list',       // home: lista de influencers
   INFLUENCER_NEW:       'influencer_new',        // cadastrar/editar
@@ -87,6 +174,7 @@ const STAGE = {
   IMAGE_FRONTAL_REVIEW: 'image_frontal_review',  // mostra imagem frontal + ações
   PROMPT_BACK:          'prompt_back',           // mostra promptBack (encadeado)
   IMAGE_BACK_REVIEW:    'image_back_review',     // mostra imagem costas + ações
+  PROMPT_VIDEO:         'prompt_video',          // 🆕 v2.3: mostra videoPrompt + 2 opções
   GENERATING_VIDEO:     'generating_video',      // Kling 15s
   VIDEO_DONE:           'video_done',            // galeria + próximos roteiros
 };
@@ -344,33 +432,39 @@ export default function VtonStudio() {
     setActiveRoteiro(roteiro);
     resetRoteiroState();
     setActionLoading(true);
-    setActionStatus('Gerando prompt da imagem CTA frontal...');
+    setActionError(null);
 
     try {
-      // Sobe fotos uma vez, reusa em todas as etapas
-      let faceUrl = facePhotoUrl;
-      let frontUrl = productFrontUrl;
-      let backUrl = productBackUrl;
+      // 🆕 v2.3 (tópico D): uploads em PARALELO — antes eram sequenciais
+      // (3 × ~10s cada = 30s) e agora rodam ao mesmo tempo (~10s total).
+      // Cada um só sobe se o estado ainda não tem URL.
+      const needFace = !facePhotoUrl;
+      const needFront = !productFrontUrl;
+      const needBack = !productBackUrl;
 
-      if (!faceUrl) {
-        setActionStatus('Subindo foto da influencer...');
-        faceUrl = await uploadToFal(
-          selectedInfluencer.facePhoto.base64,
-          selectedInfluencer.facePhoto.mimeType,
-          'face.jpg'
-        );
-        setFacePhotoUrl(faceUrl);
+      const todos = [needFace, needFront, needBack].filter(Boolean).length;
+      if (todos > 0) {
+        setActionStatus(`Subindo ${todos} foto(s) em paralelo...`);
+      } else {
+        setActionStatus('Gerando prompt da imagem CTA frontal...');
       }
-      if (!frontUrl) {
-        setActionStatus('Subindo foto frontal do produto...');
-        frontUrl = await uploadToFal(productFront.base64, productFront.mimeType, 'product-front.jpg');
-        setProductFrontUrl(frontUrl);
-      }
-      if (!backUrl) {
-        setActionStatus('Subindo foto de costas do produto...');
-        backUrl = await uploadToFal(productBack.base64, productBack.mimeType, 'product-back.jpg');
-        setProductBackUrl(backUrl);
-      }
+
+      const [faceUrlResult, frontUrlResult, backUrlResult] = await Promise.all([
+        needFace
+          ? uploadToFal(selectedInfluencer.facePhoto.base64, selectedInfluencer.facePhoto.mimeType, 'face.jpg')
+          : Promise.resolve(facePhotoUrl),
+        needFront
+          ? uploadToFal(productFront.base64, productFront.mimeType, 'product-front.jpg')
+          : Promise.resolve(productFrontUrl),
+        needBack
+          ? uploadToFal(productBack.base64, productBack.mimeType, 'product-back.jpg')
+          : Promise.resolve(productBackUrl),
+      ]);
+
+      // Salva nos estados pra próximas iterações
+      if (needFace) setFacePhotoUrl(faceUrlResult);
+      if (needFront) setProductFrontUrl(frontUrlResult);
+      if (needBack) setProductBackUrl(backUrlResult);
 
       setActionStatus('Gerando prompt da imagem CTA frontal...');
 
@@ -459,6 +553,21 @@ export default function VtonStudio() {
   async function handleAttachFrontalExternal(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // 🆕 v2.3 (tópico F): valida proporção 9:16 antes de subir
+    const aspect = await checkAspectRatio(file, 9 / 16, 0.1);
+    if (!aspect.ok && aspect.width > 0) {
+      const detected = ratioToHumanLabel(aspect.ratio);
+      const proceed = window.confirm(
+        `Imagem ${aspect.width}x${aspect.height} (${detected}).\n\n` +
+        `TikTok Shop usa formato 9:16 (vertical). Subir mesmo assim?`
+      );
+      if (!proceed) {
+        e.target.value = '';
+        return;
+      }
+    }
+
     setActionLoading(true);
     setActionError(null);
     setActionStatus('Subindo imagem externa...');
@@ -620,6 +729,21 @@ export default function VtonStudio() {
   async function handleAttachBackExternal(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // 🆕 v2.3 (tópico F): valida proporção 9:16 antes de subir
+    const aspect = await checkAspectRatio(file, 9 / 16, 0.1);
+    if (!aspect.ok && aspect.width > 0) {
+      const detected = ratioToHumanLabel(aspect.ratio);
+      const proceed = window.confirm(
+        `Imagem ${aspect.width}x${aspect.height} (${detected}).\n\n` +
+        `TikTok Shop usa formato 9:16 (vertical). Subir mesmo assim?`
+      );
+      if (!proceed) {
+        e.target.value = '';
+        return;
+      }
+    }
+
     setActionLoading(true);
     setActionError(null);
     setActionStatus('Subindo imagem externa...');
@@ -675,7 +799,27 @@ export default function VtonStudio() {
     const lastAttempt = backAttempts[backAttempts.length - 1];
     if (!lastAttempt) return;
     setBackApprovedUrl(lastAttempt.imageUrl);
-    handleGenerateVideo(frontalApprovedUrl, lastAttempt.imageUrl);
+    // 🆕 v2.3 (tópico J): vai pro novo estágio PROMPT_VIDEO em vez de gerar direto
+    setStage(STAGE.PROMPT_VIDEO);
+  }
+
+  // 🆕 v2.3 (tópicos E + J) — handler do "Já gerei fora · concluir" no PROMPT_VIDEO
+  // Copia videoPrompt + abre 3 abas (face, frontal, back) + registra como external
+  function handleVideoExternalDone() {
+    const text = activeRoteiro?.videoPrompt || '';
+    copyAndOpenTabs(text, [facePhotoUrl, frontalApprovedUrl, backApprovedUrl]);
+
+    // Registra entrada de vídeo external (sem URL de vídeo — só metadados)
+    const newVideo = {
+      roteiro: activeRoteiro,
+      frontalUrl: frontalApprovedUrl,
+      backUrl: backApprovedUrl,
+      videoUrl: null,           // sem MP4 (será usado direto no Kling.com)
+      source: 'external',       // marcador pra UI adaptar layout
+    };
+    setAllVideos(prev => [...prev, newVideo]);
+    setCompletedRoteiroIds(prev => [...prev, activeRoteiro.id]);
+    setStage(STAGE.VIDEO_DONE);
   }
 
   function handleRefazerBack(feedback) {
@@ -699,13 +843,17 @@ export default function VtonStudio() {
     setActionError(null);
     setActionStatus('Submetendo ao Kling 3.0...');
 
+    // 🆕 v2.3: aceita args opcionais; senão usa os approved URLs do estado
+    const fU = frontalUrl || frontalApprovedUrl;
+    const bU = backUrl || backApprovedUrl;
+
     try {
       const videoSubmit = await generateVideo({
         engine: 'kling',
         prompt: activeRoteiro.videoPrompt
           || `Cinematic UGC fashion video, gentle natural movement, ending with the woman looking at camera with subtle natural smile, 15 seconds, vertical format`,
-        image_url: frontalUrl,
-        element_image_url: backUrl,
+        image_url: fU,
+        element_image_url: bU,
         duration: 15,
         aspect_ratio: '9:16',
         generate_audio: false,
@@ -756,12 +904,13 @@ export default function VtonStudio() {
         throw new Error('Timeout do Kling — vídeo demorou demais');
       }
 
-      // Salva vídeo concluído
+      // Salva vídeo concluído (🆕 v2.3: marcado como kling_auto)
       const newVideo = {
         roteiro: activeRoteiro,
-        frontalUrl,
-        backUrl,
+        frontalUrl: fU,
+        backUrl: bU,
         videoUrl,
+        source: 'kling_auto',
       };
       setAllVideos(prev => [...prev, newVideo]);
       setCompletedRoteiroIds(prev => [...prev, activeRoteiro.id]);
@@ -799,15 +948,17 @@ export default function VtonStudio() {
   function ProgressBar() {
     if ([STAGE.INFLUENCER_LIST, STAGE.INFLUENCER_NEW].includes(stage)) return null;
 
+    // 🆕 v2.3: ProgressBar agora reflete 7 etapas (era 6) por causa do PROMPT_VIDEO
     const stageLabel = {
-      [STAGE.PRODUCT_UPLOAD]:        'Etapa 1/6 · Produto',
-      [STAGE.ANALYZING_PRODUCT]:     'Etapa 2/6 · Análise + Roteiros',
-      [STAGE.ROTEIROS]:              'Etapa 2/6 · Selecionar roteiro',
-      [STAGE.PROMPT_FRONTAL]:        'Etapa 3/6 · Prompt frontal',
-      [STAGE.IMAGE_FRONTAL_REVIEW]:  'Etapa 4/6 · Revisar frontal',
-      [STAGE.PROMPT_BACK]:           'Etapa 5/6 · Prompt costas',
-      [STAGE.IMAGE_BACK_REVIEW]:     'Etapa 5/6 · Revisar costas',
-      [STAGE.GENERATING_VIDEO]:      'Etapa 6/6 · Gerando vídeo',
+      [STAGE.PRODUCT_UPLOAD]:        'Etapa 1/7 · Produto',
+      [STAGE.ANALYZING_PRODUCT]:     'Etapa 2/7 · Análise + Roteiros',
+      [STAGE.ROTEIROS]:              'Etapa 2/7 · Selecionar roteiro',
+      [STAGE.PROMPT_FRONTAL]:        'Etapa 3/7 · Prompt frontal',
+      [STAGE.IMAGE_FRONTAL_REVIEW]:  'Etapa 4/7 · Revisar frontal',
+      [STAGE.PROMPT_BACK]:           'Etapa 5/7 · Prompt costas',
+      [STAGE.IMAGE_BACK_REVIEW]:     'Etapa 5/7 · Revisar costas',
+      [STAGE.PROMPT_VIDEO]:          'Etapa 6/7 · Prompt do vídeo',
+      [STAGE.GENERATING_VIDEO]:      'Etapa 7/7 · Gerando vídeo',
       [STAGE.VIDEO_DONE]:            `Vídeo ${completedRoteiroIds.length} de 3 pronto`,
     }[stage] || '';
 
@@ -971,15 +1122,15 @@ export default function VtonStudio() {
           <div className="grid-2">
             <div className="field">
               <label>Foto frontal (on-model)</label>
-              <label className="upload-area">
-                {productFront?.preview ? <img src={productFront.preview} alt="frontal" /> : <span>📸 Frontal</span>}
+              <label className="upload-area-9-16">
+                {productFront?.preview ? <img src={productFront.preview} alt="frontal" /> : <span>📸 Frontal<br/>(9:16)</span>}
                 <input type="file" accept="image/*" onChange={e => handleProductFile(e, 'front')} style={{display: 'none'}} />
               </label>
             </div>
             <div className="field">
               <label>Foto de costas (on-model)</label>
-              <label className="upload-area">
-                {productBack?.preview ? <img src={productBack.preview} alt="costas" /> : <span>📸 Costas</span>}
+              <label className="upload-area-9-16">
+                {productBack?.preview ? <img src={productBack.preview} alt="costas" /> : <span>📸 Costas<br/>(9:16)</span>}
                 <input type="file" accept="image/*" onChange={e => handleProductFile(e, 'back')} style={{display: 'none'}} />
               </label>
             </div>
@@ -1010,8 +1161,8 @@ export default function VtonStudio() {
   // STAGE 5: Roteiros (3 cards — usuário SELECIONA 1)
   if (stage === STAGE.ROTEIROS) {
     return (
-      <div className="container">
-        <button className="back-btn" onClick={() => setStage(STAGE.PRODUCT_UPLOAD)} style={{marginBottom: 14}}>← Voltar</button>
+      <div className="container" style={{position: 'relative'}}>
+        <button className="back-btn" onClick={() => setStage(STAGE.PRODUCT_UPLOAD)} style={{marginBottom: 14}} disabled={actionLoading}>← Voltar</button>
         <ProgressBar />
         <div className="header">
           <h1 className="title">3 roteiros sugeridos</h1>
@@ -1020,16 +1171,18 @@ export default function VtonStudio() {
 
         {roteiros.map(r => {
           const completed = completedRoteiroIds.includes(r.id);
+          const disabled = completed || actionLoading;
           return (
             <div
               key={r.id}
               className="card"
-              onClick={() => !completed && handleSelectRoteiro(r)}
+              onClick={() => !disabled && handleSelectRoteiro(r)}
               style={{
-                cursor: completed ? 'default' : 'pointer',
-                opacity: completed ? 0.5 : 1,
+                cursor: disabled ? 'default' : 'pointer',
+                opacity: completed ? 0.5 : (actionLoading ? 0.6 : 1),
                 borderColor: completed ? 'var(--gb)' : 'var(--bd)',
                 background: completed ? 'var(--gd)' : 'var(--sf)',
+                pointerEvents: actionLoading ? 'none' : 'auto',
               }}
             >
               <div className="card-header-row">
@@ -1064,6 +1217,29 @@ export default function VtonStudio() {
         })}
 
         {actionError && (<div className="error-box"><p>{actionError}</p></div>)}
+
+        {/* 🆕 v2.3 (tópico D): overlay de loading com status em tempo real */}
+        {actionLoading && (
+          <div style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(10,10,22,0.85)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 18,
+            zIndex: 200,
+            padding: 20,
+          }}>
+            <div className="spinner"></div>
+            <div className="loading-title">Preparando roteiro</div>
+            <div className="loading-sub" style={{textAlign: 'center', maxWidth: 420}}>
+              {actionStatus || 'Trabalhando...'}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1082,9 +1258,19 @@ export default function VtonStudio() {
         <div className="card">
           <div className="card-header-row">
             <h3 className="card-title">Prompt UGC frontal (CTA)</h3>
-            <button className="back-btn" onClick={() => setEditingPromptFrontal(!editingPromptFrontal)} style={{fontSize: 11, padding: '4px 10px'}}>
-              {editingPromptFrontal ? 'Pronto' : '✏️ Editar'}
-            </button>
+            <div style={{display: 'flex', gap: 6}}>
+              {/* 🆕 v2.3 (tópico E): botão combo "Preparar pra gerar fora" */}
+              <button
+                className="back-btn"
+                onClick={() => copyAndOpenTabs(promptFrontal, [facePhotoUrl, productFrontUrl, productBackUrl])}
+                style={{fontSize: 11, padding: '4px 10px'}}
+                disabled={!promptFrontal}
+                title="Copia o prompt + abre 3 abas com as imagens de referência"
+              >🚀 Preparar pra gerar fora</button>
+              <button className="back-btn" onClick={() => setEditingPromptFrontal(!editingPromptFrontal)} style={{fontSize: 11, padding: '4px 10px'}}>
+                {editingPromptFrontal ? 'Pronto' : '✏️ Editar'}
+              </button>
+            </div>
           </div>
           {editingPromptFrontal ? (
             <textarea
@@ -1102,15 +1288,17 @@ export default function VtonStudio() {
 
         <div className="card">
           <h3 className="card-title">Como gerar a imagem?</h3>
-          <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+          <div style={{display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center'}}>
             <button
               className="main-btn"
               onClick={handleGenerateFrontalNanoBanana}
               disabled={actionLoading || promptFrontal.length < 100}
+              style={{width: '100%'}}
             >🎨 Gerar via Nano Banana Pro · $0,15</button>
 
-            <label className="upload-area" style={{minHeight: 60}}>
-              <span>📎 Anexar imagem que eu gerei fora (Sora, Midjourney, etc) · grátis</span>
+            {/* 🆕 v2.3 (tópico F): upload-area-9-16 com aviso de proporção */}
+            <label className="upload-area-9-16">
+              <span>📎 Anexar imagem<br/>9:16 que eu gerei fora<br/><span style={{fontSize:10,opacity:0.7}}>(Sora, Midjourney, etc)<br/>grátis</span></span>
               <input type="file" accept="image/*" onChange={handleAttachFrontalExternal} style={{display: 'none'}} disabled={actionLoading} />
             </label>
           </div>
@@ -1198,7 +1386,17 @@ export default function VtonStudio() {
         <div className="card">
           <div className="card-header-row">
             <h3 className="card-title">Prompt UGC costas/3-4</h3>
-            <button className="back-btn" onClick={() => setEditingPromptBack(!editingPromptBack)} style={{fontSize: 11, padding: '4px 10px'}}>{editingPromptBack ? 'Pronto' : '✏️ Editar'}</button>
+            <div style={{display: 'flex', gap: 6}}>
+              {/* 🆕 v2.3 (tópico E): botão combo "Preparar pra gerar fora" */}
+              <button
+                className="back-btn"
+                onClick={() => copyAndOpenTabs(promptBack, [facePhotoUrl, productFrontUrl, productBackUrl, frontalApprovedUrl])}
+                style={{fontSize: 11, padding: '4px 10px'}}
+                disabled={!promptBack}
+                title="Copia o prompt + abre abas com as imagens de referência (incluindo frontal aprovada)"
+              >🚀 Preparar pra gerar fora</button>
+              <button className="back-btn" onClick={() => setEditingPromptBack(!editingPromptBack)} style={{fontSize: 11, padding: '4px 10px'}}>{editingPromptBack ? 'Pronto' : '✏️ Editar'}</button>
+            </div>
           </div>
           {editingPromptBack ? (
             <textarea value={promptBack} onChange={e => setPromptBack(e.target.value)} style={{width: '100%', minHeight: 240, fontSize: 12, fontFamily: 'monospace', padding: 12, background: 'var(--sf)', color: 'var(--t)', border: '1px solid var(--bd)', borderRadius: 'var(--rs)'}} />
@@ -1209,10 +1407,11 @@ export default function VtonStudio() {
         </div>
         <div className="card">
           <h3 className="card-title">Como gerar a imagem de costas?</h3>
-          <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-            <button className="main-btn" onClick={handleGenerateBackNanoBanana} disabled={actionLoading || promptBack.length < 100}>🎨 Gerar via Nano Banana Pro · $0,15</button>
-            <label className="upload-area" style={{minHeight: 60}}>
-              <span>📎 Anexar imagem que eu gerei fora · grátis</span>
+          <div style={{display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center'}}>
+            <button className="main-btn" onClick={handleGenerateBackNanoBanana} disabled={actionLoading || promptBack.length < 100} style={{width: '100%'}}>🎨 Gerar via Nano Banana Pro · $0,15</button>
+            {/* 🆕 v2.3 (tópico F): upload-area-9-16 com aviso de proporção */}
+            <label className="upload-area-9-16">
+              <span>📎 Anexar imagem<br/>9:16 que eu gerei fora<br/><span style={{fontSize:10,opacity:0.7}}>grátis</span></span>
               <input type="file" accept="image/*" onChange={handleAttachBackExternal} style={{display: 'none'}} disabled={actionLoading} />
             </label>
           </div>
@@ -1263,7 +1462,79 @@ export default function VtonStudio() {
     );
   }
 
-  // STAGE 10: Gerando vídeo
+  // 🆕 v2.3 STAGE 10: Prompt do vídeo (tópico J — escolhe entre Kling auto OU já gerei fora)
+  if (stage === STAGE.PROMPT_VIDEO) {
+    return (
+      <div className="container">
+        <button className="back-btn" onClick={() => setStage(STAGE.IMAGE_BACK_REVIEW)} style={{marginBottom: 14}}>← Voltar</button>
+        <ProgressBar />
+        <div className="header">
+          <h1 className="title">Prompt do vídeo</h1>
+          <p className="subtitle">Roteiro: <strong style={{color: 'var(--g)'}}>{activeRoteiro?.sceneName}</strong></p>
+        </div>
+
+        <div className="card">
+          <div className="card-header-row">
+            <h3 className="card-title">Prompt Kling 3.0 (15s)</h3>
+            <button
+              className="back-btn"
+              onClick={() => copyAndOpenTabs(
+                activeRoteiro?.videoPrompt || '',
+                [facePhotoUrl, frontalApprovedUrl, backApprovedUrl]
+              )}
+              style={{fontSize: 11, padding: '4px 10px'}}
+              disabled={!activeRoteiro?.videoPrompt}
+              title="Copia o prompt + abre 3 abas com as imagens (face + frontal aprovada + costas aprovada)"
+            >🚀 Preparar pra gerar fora</button>
+          </div>
+          <div style={{
+            fontSize: 12,
+            fontFamily: 'monospace',
+            color: 'var(--t2)',
+            whiteSpace: 'pre-wrap',
+            maxHeight: 240,
+            overflow: 'auto',
+            padding: 12,
+            background: 'var(--sf)',
+            borderRadius: 'var(--rs)',
+          }}>
+            {activeRoteiro?.videoPrompt || '(sem videoPrompt)'}
+          </div>
+          <p className="hint" style={{marginTop: 8}}>
+            Frame inicial = imagem de costas aprovada · Frame final = imagem CTA frontal aprovada · Duração 15s · 9:16
+          </p>
+        </div>
+
+        <div className="card">
+          <h3 className="card-title">Como gerar o vídeo?</h3>
+          <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+            {/* Opção 1: Kling automático (caminho original) */}
+            <button
+              className="main-btn"
+              onClick={() => handleGenerateVideo(frontalApprovedUrl, backApprovedUrl)}
+              disabled={actionLoading}
+            >🤖 Gerar via Kling 3.0 · $1,68</button>
+
+            {/* Opção 2: Já gerei fora (Kling.com via Ultra, Sora, etc) */}
+            <button
+              className="back-btn"
+              onClick={handleVideoExternalDone}
+              disabled={actionLoading}
+              style={{padding: 14, fontSize: 14}}
+              title="Copia o prompt + abre as 3 imagens em abas + marca esse roteiro como concluído"
+            >✅ Já gerei fora · concluir</button>
+
+            <p className="hint" style={{textAlign: 'center', marginTop: 4}}>
+              "Já gerei fora" copia o prompt e abre as 3 imagens. Use no Kling.com (Ultra), Sora, etc — depois conclui sem custo no app.
+            </p>
+          </div>
+          {actionError && (<div className="error-box" style={{marginTop: 12}}><p>{actionError}</p></div>)}
+        </div>
+      </div>
+    );
+  }
+
+  // STAGE 11: Gerando vídeo
   if (stage === STAGE.GENERATING_VIDEO) {
     return (
       <div className="container">
@@ -1278,34 +1549,94 @@ export default function VtonStudio() {
     );
   }
 
-  // STAGE 11: Vídeo pronto
+  // STAGE 12: Vídeo pronto
   if (stage === STAGE.VIDEO_DONE) {
     const remaining = roteiros.filter(r => !completedRoteiroIds.includes(r.id));
     const lastVideo = allVideos[allVideos.length - 1];
+    const isExternal = lastVideo?.source === 'external';
     return (
       <div className="container">
         <ProgressBar />
         <div className="header">
           <span className="badge">VTON · {completedRoteiroIds.length}/3</span>
-          <h1 className="title">Vídeo {completedRoteiroIds.length} pronto!</h1>
+          <h1 className="title">
+            {isExternal ? `Roteiro ${completedRoteiroIds.length} concluído!` : `Vídeo ${completedRoteiroIds.length} pronto!`}
+          </h1>
           <p className="subtitle">{lastVideo?.roteiro?.sceneName}</p>
         </div>
-        {lastVideo?.videoUrl && (
+
+        {/* 🆕 v2.3 (tópico J): se foi gerado fora, mostra confirmação + miniaturas */}
+        {isExternal ? (
           <div className="card">
-            <video src={lastVideo.videoUrl} controls autoPlay style={{width: '100%', borderRadius: 'var(--rs)'}} />
-            <a href={lastVideo.videoUrl} download style={{display: 'inline-block', marginTop: 8, fontSize: 13, color: 'var(--g)'}}>⬇ Baixar vídeo</a>
+            <h3 className="card-title">✅ Vídeo gerado externamente</h3>
+            <p style={{fontSize: 14, color: 'var(--t2)', marginBottom: 16}}>
+              O prompt foi copiado e as imagens abertas em abas separadas. Use no Kling.com (ou onde preferir) e o MP4 fica salvo no teu PC.
+            </p>
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12}}>
+              {lastVideo?.frontalUrl && (
+                <div>
+                  <div style={{fontSize: 11, color: 'var(--t3)', marginBottom: 4}}>Frame final (CTA frontal)</div>
+                  <img src={lastVideo.frontalUrl} alt="frontal" style={{width: '100%', borderRadius: 'var(--rs)', maxHeight: 300, objectFit: 'contain'}} />
+                </div>
+              )}
+              {lastVideo?.backUrl && (
+                <div>
+                  <div style={{fontSize: 11, color: 'var(--t3)', marginBottom: 4}}>Frame inicial (costas)</div>
+                  <img src={lastVideo.backUrl} alt="costas" style={{width: '100%', borderRadius: 'var(--rs)', maxHeight: 300, objectFit: 'contain'}} />
+                </div>
+              )}
+            </div>
+            <button
+              className="back-btn"
+              onClick={() => copyAndOpenTabs(
+                lastVideo?.roteiro?.videoPrompt || '',
+                [facePhotoUrl, lastVideo?.frontalUrl, lastVideo?.backUrl]
+              )}
+              style={{width: '100%', padding: 12, marginTop: 4}}
+            >🔁 Recopiar prompt + reabrir imagens</button>
           </div>
+        ) : (
+          lastVideo?.videoUrl && (
+            <div className="card">
+              <video src={lastVideo.videoUrl} controls autoPlay style={{width: '100%', borderRadius: 'var(--rs)'}} />
+              <a href={lastVideo.videoUrl} download style={{display: 'inline-block', marginTop: 8, fontSize: 13, color: 'var(--g)'}}>⬇ Baixar vídeo</a>
+            </div>
+          )
         )}
+
         {allVideos.length > 1 && (
           <div className="card">
-            <h3 className="card-title">Todos os vídeos prontos ({allVideos.length})</h3>
+            <h3 className="card-title">Todos os roteiros prontos ({allVideos.length})</h3>
             <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
               {allVideos.map((v, idx) => (
-                <video key={idx} src={v.videoUrl} controls style={{width: 200, borderRadius: 'var(--rs)'}} />
+                v.source === 'external' ? (
+                  <div key={idx} style={{
+                    width: 200,
+                    height: 112,
+                    borderRadius: 'var(--rs)',
+                    background: 'var(--sf)',
+                    border: '1px solid var(--bd)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                    fontSize: 12,
+                    color: 'var(--t2)',
+                    padding: 8,
+                    textAlign: 'center',
+                  }}>
+                    <div style={{fontSize: 24, marginBottom: 4}}>📦</div>
+                    <div style={{fontWeight: 600, color: 'var(--g)'}}>Externo</div>
+                    <div style={{fontSize: 10, marginTop: 2}}>{v.roteiro?.sceneName}</div>
+                  </div>
+                ) : (
+                  <video key={idx} src={v.videoUrl} controls style={{width: 200, borderRadius: 'var(--rs)'}} />
+                )
               ))}
             </div>
           </div>
         )}
+
         <div className="card">
           {remaining.length > 0 ? (
             <>
@@ -1322,7 +1653,7 @@ export default function VtonStudio() {
           ) : (
             <div style={{textAlign: 'center', padding: 20}}>
               <div style={{fontSize: 48, marginBottom: 10}}>🎉</div>
-              <h3 className="card-title">Todos os 3 vídeos prontos!</h3>
+              <h3 className="card-title">Todos os 3 roteiros prontos!</h3>
               <p className="hint">Total gasto: ${cumulativeCost.toFixed(2)}</p>
             </div>
           )}
