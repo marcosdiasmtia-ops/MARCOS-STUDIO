@@ -1,19 +1,28 @@
-// api/generate-vton-prompt.js (v2.0 — modo dual: roteiros_only + all)
+// api/generate-vton-prompt.js (v2.1 — CTA dinâmico via web_search com guardrails)
 //
-// MUDANÇAS v2.0 (vs v1.2):
-//   - NOVO MODO "roteiros_only": retorna SÓ os 3 roteiros (sceneName,
-//     description, movementPlan, hasBack, videoPrompt) SEM gerar prompts
-//     pesados. Permite arquitetura de aprovação manual onde os prompts
-//     de imagem são gerados sob demanda (chamada separada).
-//   - MODO "all" (legado, default): retorna 3 roteiros COM promptFrontal e
-//     promptBack já gerados (compatibilidade com v1.2).
+// MUDANÇAS v2.1 (vs v2.0):
+//   - REMOVIDO hardcode do CTA fixo "olha para a câmera com leve sorriso natural"
+//   - NOVA seção "CTA FINAL — GUARDRAILS DINÂMICOS" no system prompt:
+//     Claude tem LIBERDADE pra inventar CTAs trending via web_search,
+//     mas com 3 INVARIANTES obrigatórias:
+//       1. Pose final FOTOGRAFÁVEL (não movimento contínuo) —
+//          obrigatório porque a imagem CTA frontal = último frame do vídeo
+//       2. Rosto VISÍVEL e olhando pra câmera (ou bem perto dela)
+//       3. Duração 2-3s (compatível com Kling 3.0 standard)
+//   - Os 3 roteiros DEVEM ter CTAs DIFERENTES entre si
+//   - Validação no código: warning (não erro) se 3 CTAs forem idênticos
+//   - Schema atualizado nos 2 modos (roteiros_only + all)
+//
+// MUDANÇAS v2.0 (mantidas):
+//   - MODO "roteiros_only": retorna SÓ os 3 roteiros (sem prompts pesados)
+//   - MODO "all" (legado, default): retorna 3 roteiros COM prompts gerados
 //
 // PRINCÍPIOS (mantidos):
 //   - Template UGC com 13 blocos parametrizados
 //   - "wearing the outfit from reference image" curto basta
 //   - Anti-fenótipo hardcoded (Regra 15 do Notion)
 //   - Movimentos NÃO travados — Claude decide via web_search dinâmico
-//   - CTA fixo (única regra hardcoded)
+//   - CTA agora também NÃO travado — Claude decide com guardrails (v2.1)
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -76,8 +85,8 @@ ${sceneHint}
 
 TAREFA (modo: ${mode}):
 ${isRoteirosOnly
-  ? '1. Use web_search com queries focadas em CONVERSÃO TikTok Shop fashion\n2. Gere 3 ROTEIROS curtos (somente metadados, SEM promptFrontal/promptBack ainda)\n3. Cada roteiro: sceneName + description + movementPlan + hasBack + videoPrompt\n4. PREFIRA hasBack=true na maioria (movimento valoriza)\n5. CTA final SEMPRE fixo: "olha para a câmera com leve sorriso natural"\n6. Retorne APENAS o JSON conforme schema definido'
-  : '1. Use web_search com queries focadas em CONVERSÃO TikTok Shop fashion\n2. Gere 3 ROTEIROS COMPLETOS (com promptFrontal e promptBack)\n3. PREFIRA hasBack=true na maioria\n4. CTA final SEMPRE fixo\n5. Retorne APENAS o JSON conforme schema definido'
+  ? '1. Use web_search com queries focadas em CONVERSÃO TikTok Shop fashion\n2. Gere 3 ROTEIROS curtos (somente metadados, SEM promptFrontal/promptBack ainda)\n3. Cada roteiro: sceneName + description + movementPlan + hasBack + videoPrompt\n4. PREFIRA hasBack=true na maioria (movimento valoriza)\n5. CTA dinâmico: cada roteiro tem CTA DIFERENTE (ver guardrails no system prompt)\n6. Retorne APENAS o JSON conforme schema definido'
+  : '1. Use web_search com queries focadas em CONVERSÃO TikTok Shop fashion\n2. Gere 3 ROTEIROS COMPLETOS (com promptFrontal e promptBack)\n3. PREFIRA hasBack=true na maioria\n4. CTA dinâmico: cada roteiro tem CTA DIFERENTE (ver guardrails no system prompt)\n5. Retorne APENAS o JSON conforme schema definido'
 }`;
 
     const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -211,9 +220,21 @@ ${isRoteirosOnly
 
       // Garantir consistência de custo
       r.estimatedCost = r.hasBack ? 0.30 : 0.15;
+    }
 
-      // Garantir CTA fixo (proteção contra Claude desviar do padrão)
-      r.movementPlan.cta = 'olha para a câmera com leve sorriso natural';
+    // Validação v2.1: os 3 CTAs DEVEM ser diferentes entre si
+    // (não falha — apenas loga warning e segue, pra não bloquear UX)
+    const ctas = parsed.roteiros.map(r => (r.movementPlan?.cta || '').trim().toLowerCase());
+    const uniqueCtas = new Set(ctas);
+    if (uniqueCtas.size < 3) {
+      console.warn(
+        `[generate-vton-prompt] WARNING: CTAs não são todos diferentes (${uniqueCtas.size}/3 únicos). ` +
+        `CTAs: ${ctas.map((c, i) => `[${i + 1}] "${c}"`).join(' | ')}`
+      );
+    } else {
+      console.log(
+        `[generate-vton-prompt] CTAs diversos OK: ${parsed.roteiros.map((r, i) => `[${i + 1}] "${r.movementPlan.cta}"`).join(' | ')}`
+      );
     }
 
     console.log(
@@ -253,11 +274,56 @@ Use web_search (até 4 vezes) com queries focadas em CONVERSÃO/VENDAS:
   - "popular Instagram locations" (estética, não conversão)
 
 ═══════════════════════════════════════════════════════════
-CTA FINAL — REGRA FIXA
+CTA FINAL — GUARDRAILS DINÂMICOS (v2.1)
 ═══════════════════════════════════════════════════════════
 
-Os ÚLTIMOS 2-3 SEGUNDOS de TODO vídeo terminam com a influencer
-olhando pra câmera com leve sorriso natural. NÃO varia.
+Os ÚLTIMOS 2-3 SEGUNDOS de cada vídeo são o CTA — a "pose final"
+que captura atenção e estimula clique no produto.
+
+Você TEM LIBERDADE para inventar CTAs diferentes para cada roteiro
+baseados em pesquisa de tendências TikTok Shop atuais. MAS você
+DEVE respeitar 3 INVARIANTES OBRIGATÓRIAS:
+
+INVARIANTE 1 — POSE FINAL FOTOGRAFÁVEL
+  ✅ "olha para câmera com leve sorriso confiante e mãos no quadril"
+  ✅ "vira ligeiramente o rosto para o lado, sorriso de canto, olhar pela câmera"
+  ✅ "mão suave no cabelo, microsmile, olhar direto"
+  ✅ "mãos cruzadas suavemente na frente, sorriso natural genuíno"
+  ❌ "gira em 360°" (movimento contínuo, não fotografável)
+  ❌ "pisca rapidamente" (frame único impossível)
+  ❌ "abre os braços e faz coração com as mãos" (gesto dinâmico)
+  
+  POR QUÊ: a imagem CTA frontal gerada DEPOIS dessa especificação será o
+  ÚLTIMO FRAME do vídeo Kling. Tem que ser uma POSE ESTÁTICA capturável.
+
+INVARIANTE 2 — ROSTO VISÍVEL E OLHANDO PRA CÂMERA
+  ✅ Olhar direto na lente (looking at camera)
+  ✅ Olhar de canto/lado mas COM rosto visível (3/4 view, not full profile)
+  ❌ De costas (NÃO usar de costas no CTA, mesmo se hasBack=true)
+  ❌ Olhando pra cima/pro chão (perde conexão com viewer)
+  ❌ Cabeça baixa ou rosto coberto
+
+INVARIANTE 3 — DURAÇÃO 2-3 SEGUNDOS
+  Use frases curtas e singulares (1 ação principal). Não descreva sequências
+  com "primeiro X depois Y" — Kling 3.0 standard tem janela curta.
+
+═══════════════════════════════════════════════════════════
+DIVERSIDADE — OS 3 CTAS DEVEM SER DIFERENTES
+═══════════════════════════════════════════════════════════
+
+Os 3 roteiros que você gera DEVEM ter 3 CTAs DIFERENTES entre si.
+NÃO repita o mesmo CTA em mais de um roteiro. Use web_search pra
+descobrir quais CTAs estão convertendo melhor em fashion TikTok Shop
+agora (abril 2026) e selecione 3 distintos que combinem com o cenário
+de cada roteiro.
+
+EXEMPLO DE 3 CTAs DIFERENTES (apenas inspiração — invente os seus):
+  Roteiro 1 (cenário casa): "olha pra câmera com sorriso confiante,
+                              mãos suavemente no quadril"
+  Roteiro 2 (cenário escritório): "vira o rosto 3/4 pra câmera com
+                                    microsmile e olhar de canto"  
+  Roteiro 3 (cenário rua): "passa a mão suavemente no cabelo, olhar
+                             direto na câmera, sorriso natural genuíno"
 
 ═══════════════════════════════════════════════════════════
 hasBack — PREFERIR true
@@ -281,16 +347,16 @@ OUTPUT — Schema (modo roteiros_only)
       "movementPlan": {
         "inicio": "movimento inicial em pt-br",
         "transicao": "movimento de transição em pt-br",
-        "cta": "olha para a câmera com leve sorriso natural"
+        "cta": "CTA dinâmico em pt-br seguindo as 3 invariantes (pose fotografável, rosto visível, 2-3s) — DIFERENTE dos outros 2 roteiros"
       },
       
       "hasBack": true | false,
       "estimatedCost": 0.30 | 0.15,
       
-      "videoPrompt": "Instrução em INGLÊS pro Kling 3.0 (~80-150 palavras)"
+      "videoPrompt": "Instrução em INGLÊS pro Kling 3.0 (~80-150 palavras). O final do vídeo DEVE corresponder ao CTA descrito em movementPlan.cta"
     },
-    { "id": "roteiro_2", ... },
-    { "id": "roteiro_3", ... }
+    { "id": "roteiro_2", ... CTA diferente do roteiro_1 ... },
+    { "id": "roteiro_3", ... CTA diferente dos roteiros 1 e 2 ... }
   ]
 }
 
@@ -352,13 +418,6 @@ WEB SEARCH — FOCO EM CONVERSÃO COMERCIAL
   - "highest converting UGC fashion movements women"
 
 ═══════════════════════════════════════════════════════════
-CTA FINAL — REGRA FIXA (NÃO MUDAR)
-═══════════════════════════════════════════════════════════
-
-Os ÚLTIMOS 2-3 SEGUNDOS terminam com:
-  → Influencer olhando pra câmera com leve sorriso natural
-
-═══════════════════════════════════════════════════════════
 TEMPLATE-PAI UGC (13 blocos)
 ═══════════════════════════════════════════════════════════
 
@@ -377,6 +436,23 @@ Cada prompt UGC tem 13 blocos. Comprimento alvo: 1300-1500 caracteres.
 11. CAMERA (FIXO): "shot with static tripod at eye level, 50mm equivalent focal length, photographed with iPhone 15 Pro, f/1.9 aperture, soft creamy bokeh"
 12. AUTHENTICITY (FIXO): "fine visible pores on skin, natural peach fuzz catching the light, subtle smile lines, slight natural skin irregularity, fabric slightly creased where body bends"
 13. FORMAT (FIXO): "full body visible head to toe, vertical 9:16 format"
+
+═══════════════════════════════════════════════════════════
+CTA FINAL — GUARDRAILS DINÂMICOS (v2.1)
+═══════════════════════════════════════════════════════════
+
+Os ÚLTIMOS 2-3 SEGUNDOS de cada vídeo são o CTA. Você TEM LIBERDADE
+pra inventar CTAs diferentes pra cada roteiro, mas DEVE respeitar:
+
+INVARIANTE 1 — POSE FINAL FOTOGRAFÁVEL (não movimento contínuo)
+INVARIANTE 2 — ROSTO VISÍVEL E OLHANDO PRA CÂMERA (não de costas)
+INVARIANTE 3 — DURAÇÃO 2-3 SEGUNDOS (1 ação principal)
+
+OS 3 CTAS DEVEM SER DIFERENTES ENTRE SI. Use web_search pra descobrir
+CTAs trending em fashion TikTok Shop e selecione 3 distintos.
+
+O promptFrontal de cada roteiro DEVE refletir visualmente a pose CTA
+descrita em movementPlan.cta (a imagem CTA frontal = último frame do vídeo).
 
 ═══════════════════════════════════════════════════════════
 GATILHOS A EVITAR (Regra 15 do Notion)
@@ -399,12 +475,12 @@ OUTPUT — Schema (modo all/legado)
       "id": "roteiro_1",
       "sceneName": "...",
       "description": "...",
-      "movementPlan": { "inicio": "...", "transicao": "...", "cta": "olha para a câmera com leve sorriso natural" },
+      "movementPlan": { "inicio": "...", "transicao": "...", "cta": "CTA dinâmico — DIFERENTE em cada roteiro, seguindo invariantes" },
       "hasBack": true | false,
       "estimatedCost": 0.30 | 0.15,
-      "promptFrontal": "Template UGC 13 blocos pra IMAGEM CTA FINAL",
+      "promptFrontal": "Template UGC 13 blocos pra IMAGEM CTA FINAL (deve refletir a pose descrita em movementPlan.cta)",
       "promptBack": null | "Template UGC 13 blocos pra IMAGEM INICIAL",
-      "videoPrompt": "Instrução em INGLÊS pro Kling 3.0"
+      "videoPrompt": "Instrução em INGLÊS pro Kling 3.0 (final do vídeo = CTA descrito)"
     },
     ...
   ]
