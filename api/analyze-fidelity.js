@@ -1,4 +1,19 @@
-// api/analyze-fidelity.js (v1.0 — análise opcional de fidelidade do produto)
+// api/analyze-fidelity.js (v1.1 — fix bug Bugs H+I: rejeição de data URI pelo Claude)
+//
+// MUDANÇAS v1.1 (vs v1.0):
+//   - Adicionada função helper `buildImageSource(url)` que detecta se a URL
+//     recebida é DATA URI (ex: "data:image/jpeg;base64,...") OU URL HTTPS real.
+//   - DATA URI → converte pra { type: 'base64', media_type, data } (formato
+//     que a API do Claude aceita via base64 source).
+//   - URL HTTPS real → mantém { type: 'url', url } (formato direto da API).
+//
+// POR QUE ESSE FIX É NECESSÁRIO:
+//   O /api/upload.js do MARCOS-STUDIO NÃO faz upload real pro fal.ai — apenas
+//   devolve o base64 como data URI (data:image/...;base64,/9j/4AAQ...). fal.ai
+//   aceita data URI direto nos endpoints de geração (Nano Banana, Kling), por
+//   isso o pipeline de geração funciona. MAS a API do Claude REJEITA data URI
+//   no campo `url` com Error 400 Bad Request — o que travava as funções de
+//   "Analisar fidelidade" (frontal e costas) listadas como Bugs H e I.
 //
 // Endpoint que compara IMAGEM GERADA vs FOTOS DO PRODUTO REAL e retorna
 // checklist FACTUAL (não subjetivo) listando o que bateu e o que divergiu.
@@ -33,6 +48,47 @@
 //     criticalIssues: [ 'lista de divergências sérias que afetam venda' ],
 //     minorIssues: [ 'divergências leves que não afetam' ]
 //   }
+
+/**
+ * Constrói o objeto `source` aceito pela API do Claude para imagens.
+ *
+ * Detecta automaticamente se a URL recebida é:
+ *   - Data URI (data:image/...;base64,...) → { type: 'base64', media_type, data }
+ *   - URL HTTPS real (https://...)         → { type: 'url', url }
+ *
+ * Necessário porque o /api/upload.js do MARCOS-STUDIO não faz upload real
+ * pro fal.ai — devolve o base64 como data URI. fal.ai aceita data URI direto
+ * nos endpoints de geração, mas a API do Claude REJEITA data URI no campo
+ * `url` com Error 400. Esse helper resolve a incompatibilidade transparentemente.
+ *
+ * @param {string} url - URL da imagem (HTTPS pública OU data URI)
+ * @returns {object} source compatível com a API do Claude (type+url ou type+media_type+data)
+ * @throws Error se url for inválido ou data URI mal formado
+ */
+function buildImageSource(url) {
+  if (typeof url !== 'string' || !url) {
+    throw new Error('buildImageSource: url must be a non-empty string');
+  }
+
+  if (url.startsWith('data:')) {
+    // Data URI — extrai media_type e base64
+    const match = url.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      throw new Error('buildImageSource: invalid data URI format (expected data:<mime>;base64,<data>)');
+    }
+    return {
+      type: 'base64',
+      media_type: match[1],
+      data: match[2]
+    };
+  }
+
+  // URL HTTPS pública — Claude aceita direto
+  return {
+    type: 'url',
+    url: url
+  };
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -182,20 +238,23 @@ FORMATO DE SAÍDA — CRÍTICO
 ✅ Primeira linha começa com: {
 ✅ Última linha termina com: }`;
 
+    // Detecta tipo de cada URL pra logar (ajuda diagnóstico futuro)
+    const genIsDataUri = generatedImageUrl.startsWith('data:');
+    const prodIsDataUri = primaryProductUrl.startsWith('data:');
+    console.log(
+      `[analyze-fidelity] viewType=${viewType} | ` +
+      `generatedImage=${genIsDataUri ? 'data URI (' + Math.round(generatedImageUrl.length / 1024) + 'KB)' : 'HTTPS URL'} | ` +
+      `productImage=${prodIsDataUri ? 'data URI (' + Math.round(primaryProductUrl.length / 1024) + 'KB)' : 'HTTPS URL'}`
+    );
+
     const userContent = [
       {
         type: 'image',
-        source: {
-          type: 'url',
-          url: generatedImageUrl
-        }
+        source: buildImageSource(generatedImageUrl)
       },
       {
         type: 'image',
-        source: {
-          type: 'url',
-          url: primaryProductUrl
-        }
+        source: buildImageSource(primaryProductUrl)
       },
       {
         type: 'text',
