@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v4.0 — adds VTON helpers)
+// API helper functions for all backend calls (v4.1 — adds UGC Falante helpers)
 //
 // CHANGELOG:
 // v3.0 — dual-photo analyzeIdentity + facePrompt pipeline (legacy/FLUX.2 pro)
@@ -7,6 +7,8 @@
 //   - analyzeProductVton   → /api/analyze-product-vton
 //   - generateVtonPrompt   → /api/generate-vton-prompt
 //   - generateVtonImage    → /api/generate-vton-image
+// v4.1 — UGC Falante Sessão 1 (fundamentos: voz):
+//   - recommendVoice       → /api/ugc-voice-recommend
 //
 // Adiciona também:
 //   - getVtonProfiles, saveVtonProfile, deleteVtonProfile (storage separado
@@ -547,4 +549,48 @@ export async function analyzeFidelity({
     throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
   }
   return data;  // { overall, summary, checklist, criticalIssues, minorIssues }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// UGC FALANTE HELPERS (v4.1 — Sessão 1 de codificação)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Helpers da nova aba UGC Falante. Este é o primeiro de uma série:
+//   Sessão 1: voz (este helper)
+//   Sessão 2: image-base, script, veo-prompt
+//   Sessão 3-4: UI (wizard + galeria + output)
+
+// Recomenda voz Veo 3 baseada em (estilo × gênero da influencer).
+// Espelha o conceito "voz dinâmica = ƒ(influencer × estilo)" da arquitetura
+// UGC Falante v3.0, validado empiricamente em 01/05/2026.
+//
+// @param {string} styleId — id do estilo UGC (ex: 'natural', 'autoridade',
+//   'amigavel', 'urgente', 'curioso', 'storytelling', 'comparacao',
+//   'confissao', 'alerta', 'hack', 'custo_beneficio')
+// @param {'female'|'male'} [gender='female'] — gênero da influencer
+// @returns {Promise<{voiceId: string, styleId: string, gender: string,
+//   source: 'mapped'|'fallback'}>}
+//
+// Combina com o objeto-voz completo de src/data/ugc-veo-voices.js:
+//   import { getVoiceById } from './data/ugc-veo-voices.js';
+//   const { voiceId } = await recommendVoice('autoridade');
+//   const voice = getVoiceById(voiceId); // → { id, gender, tone, ... }
+export async function recommendVoice(styleId, gender = 'female') {
+  const res = await fetch('/api/ugc-voice-recommend', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ styleId, gender })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('ugc-voice-recommend response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao recomendar voz (${res.status}). Verifique os logs no Vercel.`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data; // { voiceId, styleId, gender, source }
 }
