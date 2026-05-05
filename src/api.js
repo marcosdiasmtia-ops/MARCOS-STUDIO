@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v4.1 — adds UGC Falante helpers)
+// API helper functions for all backend calls (v4.2 — adds UGC Falante asset helpers)
 //
 // CHANGELOG:
 // v3.0 — dual-photo analyzeIdentity + facePrompt pipeline (legacy/FLUX.2 pro)
@@ -9,6 +9,10 @@
 //   - generateVtonImage    → /api/generate-vton-image
 // v4.1 — UGC Falante Sessão 1 (fundamentos: voz):
 //   - recommendVoice       → /api/ugc-voice-recommend
+// v4.2 — UGC Falante Sessão 2 (geração de assets):
+//   - generateUgcImageBase → /api/ugc-image-base
+//   - generateUgcScript    → /api/ugc-script
+//   - generateUgcVeoPrompt → /api/ugc-veo-prompt
 //
 // Adiciona também:
 //   - getVtonProfiles, saveVtonProfile, deleteVtonProfile (storage separado
@@ -593,4 +597,129 @@ export async function recommendVoice(styleId, gender = 'female') {
     throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
   }
   return data; // { voiceId, styleId, gender, source }
+}
+
+
+// ───────────────────────────────────────────────────────────────────────
+// SESSÃO 2 — Geração de assets (image-base + script + veo-prompt)
+// ───────────────────────────────────────────────────────────────────────
+
+// Gera o FRAME INICIAL (estático) do vídeo UGC Falante via Nano Banana Pro.
+// Esse frame vai ser animado pelo Veo 3 frame-to-video como Take 1.
+//
+// Espelha o padrão de generateVtonImage (mesmo modelo no fal.ai). O prompt
+// deve vir já montado pelo frontend (combinando strings dos 7 data files
+// de UGC Falante: ugc-styles, ugc-categories, ugc-durations, ugc-cameras,
+// ugc-realism, ugc-scenarios + dados da influencer e produto).
+//
+// @param {object} input
+// @param {string} input.facePhotoUrl    — URL pública da foto de rosto da influencer
+// @param {string} input.productPhotoUrl — URL pública da foto do produto
+// @param {string} input.prompt          — prompt em inglês, mín 100 chars
+// @returns {Promise<{imageUrl: string, prompt: string, seed: number|null,
+//   requestId: string}>}
+export async function generateUgcImageBase({ facePhotoUrl, productPhotoUrl, prompt }) {
+  const res = await fetch('/api/ugc-image-base', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      facePhotoUrl,
+      productPhotoUrl,
+      prompt,
+    })
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('ugc-image-base response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar frame UGC Falante (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data; // { imageUrl, prompt, seed, requestId }
+}
+
+// Gera o PACOTE PÓS-PRODUÇÃO COMPLETO em uma única chamada Claude Sonnet 4.
+// Diferencial vs Trendly: além do roteiro, gera frases on-screen + descrição
+// + hashtags + sugestão de música + 3 versões de CTA (Tema 8 + Item 8 da
+// arquitetura UGC Falante v3.0).
+//
+// @param {object} input
+// @param {object} input.influencer       — { name, bodyDescription?, vibe? }
+// @param {object} input.product          — { name, description?, price?, originalPrice? }
+// @param {string} input.styleId          — id de ugc-styles.js (ex: 'autoridade')
+// @param {string} input.durationId       — '8s'|'16s'|'24s'|'32s'|'40s'
+// @param {string} input.categoryId       — id de ugc-categories.js
+// @param {string} [input.viralTranscript] — diferencial: usar transcrição viral como base
+// @param {Array}  [input.previousScripts] — pra Claude não repetir vídeos anteriores
+// @param {string} [input.trendData]      — dados de /api/search (futuro)
+// @returns {Promise<{
+//   script: Array<{takeNumber: number, fala: string, wordCount: number, durationSeconds: number}>,
+//   onScreenPhrases: Array<{takeNumber: number, phrase: string}>,
+//   description: string,
+//   hashtags: string[],
+//   musicSuggestion: {genre: string, mood: string, bpm: string, searchTerms: string[]},
+//   ctas: {spoken: string, onScreen: string, written: string}
+// }>}
+export async function generateUgcScript(input) {
+  const res = await fetch('/api/ugc-script', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('ugc-script response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar roteiro UGC Falante (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data; // { script, onScreenPhrases, description, hashtags, musicSuggestion, ctas }
+}
+
+// Gera N PROMPTS EM INGLÊS pra Veo 3 (1 por take, com 8 blocos cada).
+// Cada prompt inclui: INTRO, ENVIRONMENT, VISUAL REALISM, CAMERA, BEHAVIOR,
+// SPEECH (com voz Veo 3 + fala PT-BR verbatim), PRODUCT INTERACTION,
+// GENERAL GUIDELINES (incluindo a instrução crítica "end with stable pose
+// for continuation video" — Item 4 da arquitetura UGC Falante).
+//
+// @param {object} input
+// @param {object} input.influencer  — { name, bodyDescription?, vibe? }
+// @param {object} input.product     — { name, description? }
+// @param {string} input.styleId     — id de ugc-styles.js
+// @param {string} input.durationId  — '8s'|'16s'|'24s'|'32s'|'40s'
+// @param {string} input.cameraId    — id de ugc-cameras.js
+// @param {string} input.realismId   — id de ugc-realism.js
+// @param {string} input.scenarioId  — id de ugc-scenarios.js
+// @param {string} input.voiceId     — voiceId resolvido por recommendVoice()
+// @param {Array}  input.script      — array de takes vindo de generateUgcScript()
+// @param {object} input.dataContext — strings já resolvidas dos data files:
+//   { styleName, scenarioPrompt, cameraPrompt, realismPrompt, behaviorVibe, voiceTone }
+// @param {boolean} [input.hasStarterFrame=false] — true quando Take 1 tem frame
+// @returns {Promise<{prompts: Array<{takeNumber: number, prompt: string}>}>}
+export async function generateUgcVeoPrompt(input) {
+  const res = await fetch('/api/ugc-veo-prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('ugc-veo-prompt response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar prompts Veo 3 (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data; // { prompts: [{takeNumber, prompt}, ...] }
 }
