@@ -17,6 +17,9 @@
     "api/generate-vton-prompt.js": { "maxDuration": 120 },
     "api/generate-vton-image.js": { "maxDuration": 90 },
     "api/generate-back-prompt-vton.js": { "maxDuration": 60 },
-    "api/analyze-fidelity.js": { "maxDuration": 60 }
+    "api/analyze-fidelity.js": { "maxDuration": 60 },
+    "api/ugc-image-base.js": { "maxDuration": 90 },
+    "api/ugc-script.js": { "maxDuration": 60 },
+    "api/ugc-veo-prompt.js": { "maxDuration": 60 }
   }
 }
