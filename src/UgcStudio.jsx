@@ -212,19 +212,45 @@ export default function UgcStudio() {
       const fileName = productData.photoFile.name || 'product.jpg';
       const productPhotoUrl = await uploadToFal(base64, mimeType, fileName);
       if (!productPhotoUrl || typeof productPhotoUrl !== 'string') {
-        throw new Error('uploadToFal não retornou URL pública');
+        throw new Error('uploadToFal não retornou URL pública pro produto');
       }
 
-      // 2. Gera frame inicial via Nano Banana Pro
+      // 2. Upload foto da influencer (perfil VTON guarda como objeto
+      //    {base64, mimeType, preview} — Nano Banana Pro precisa de URL pública)
+      setProgressMsg('📤 Subindo foto da influencer...');
+      let facePhotoUrl;
+      if (typeof influencer.facePhoto === 'string') {
+        // Edge case: já é URL pública (perfis legacy talvez)
+        facePhotoUrl = influencer.facePhoto;
+      } else if (
+        influencer.facePhoto?.base64 &&
+        influencer.facePhoto?.mimeType
+      ) {
+        // Caso normal (perfil VTON): {base64, mimeType, preview}
+        facePhotoUrl = await uploadToFal(
+          influencer.facePhoto.base64,
+          influencer.facePhoto.mimeType,
+          'face.jpg'
+        );
+      } else {
+        throw new Error(
+          'Influencer cadastrada sem foto válida (esperado base64 ou URL)'
+        );
+      }
+      if (!facePhotoUrl || typeof facePhotoUrl !== 'string') {
+        throw new Error('uploadToFal não retornou URL pública pra face');
+      }
+
+      // 3. Gera frame inicial via Nano Banana Pro
       setProgressMsg('🎨 Gerando frame inicial (Nano Banana Pro)... ~30-60s');
       const imagePrompt = buildImagePrompt();
       const imageResult = await generateUgcImageBase({
-        facePhotoUrl: influencer.facePhoto,
+        facePhotoUrl,
         productPhotoUrl,
         prompt: imagePrompt,
       });
 
-      // 3. Gera roteiro + pacote pós-produção via Claude Sonnet 4
+      // 4. Gera roteiro + pacote pós-produção via Claude Sonnet 4
       setProgressMsg('📝 Gerando roteiro e pacote completo...');
       const scriptResult = await generateUgcScript({
         influencer: {
@@ -245,7 +271,7 @@ export default function UgcStudio() {
         categoryId: productData.categoryId,
       });
 
-      // 4. Gera prompts EN com 8 blocos via Claude Sonnet 4
+      // 5. Gera prompts EN com 8 blocos via Claude Sonnet 4
       setProgressMsg('🎬 Gerando prompts Veo 3 (8 blocos × N takes)...');
       const style = getStyleById(styleId);
       const scenario = getScenarioById(scenarioId);
@@ -281,7 +307,7 @@ export default function UgcStudio() {
         hasStarterFrame: true,
       });
 
-      // 5. Apresenta resultados
+      // 6. Apresenta resultados
       setResults({
         image: imageResult,
         package: scriptResult,
