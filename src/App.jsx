@@ -3,6 +3,7 @@ import { getSystemPrompt, VIDEO_NUMBERS_RULES } from './systemPrompt';
 import { callClaude, generateContent, searchTrends, generateImage, generateBackPrompt, generateVideo, checkVideoStatus, uploadToFal, fileToBase64, getProfiles, analyzeProduct } from './api';
 import ProfileManager from './ProfileManager';
 import VtonStudio from './VtonStudio';
+import UgcStudio from './UgcStudio';
 import './styles.css';
 
 const VIDEO_TYPES = [
@@ -697,11 +698,13 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 
 // ═══════════════════════════════════════════════════════════════════════
 // v4.0 — Tab switcher: Legacy (FLUX.2 pro) vs VTON (Nano Banana Pro)
+// v4.2 — Tab switcher ganha terceira aba: UGC Falante (Sessão 3 de codificação)
 // ═══════════════════════════════════════════════════════════════════════
 //
 // Wrapper que decide qual aba mostrar baseado em estado local.
 // A aba escolhida fica salva em localStorage pra sobreviver a reload.
-// Aba legacy continua intacta (LegacyApp). Aba VTON é o novo VtonStudio.
+// Aba legacy continua intacta (LegacyApp). Aba VTON é o VtonStudio.
+// Aba UGC Falante é o novo UgcStudio (lip-sync via Veo 3).
 
 const TAB_KEY = 'marcos-studio-active-tab';
 
@@ -770,10 +773,29 @@ export default function App() {
         >
           🎥 VTON
         </button>
+        <button
+          onClick={() => switchTab('ugc')}
+          style={{
+            background: tab === 'ugc' ? 'var(--gd)' : 'transparent',
+            border: tab === 'ugc' ? '1px solid var(--gb)' : '1px solid var(--bd)',
+            color: tab === 'ugc' ? 'var(--g)' : 'var(--t2)',
+            padding: '8px 18px',
+            borderRadius: 20,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            transition: 'all 0.2s',
+          }}
+        >
+          🎤 UGC Falante
+        </button>
       </div>
 
       {/* Conteúdo da aba selecionada */}
-      {tab === 'legacy' ? <LegacyApp /> : <VtonStudio />}
+      {tab === 'legacy' && <LegacyApp />}
+      {tab === 'vton' && <VtonStudio />}
+      {tab === 'ugc' && <UgcStudio />}
     </div>
   );
 }
