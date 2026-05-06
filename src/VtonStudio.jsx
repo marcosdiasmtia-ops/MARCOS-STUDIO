@@ -1,6 +1,23 @@
-// src/VtonStudio.jsx (v2.3 — UX upgrades + bugfixes + estágio PROMPT_VIDEO)
+// src/VtonStudio.jsx (v2.4 — Sessão 3.5 Fase 2: cadastro removido)
 //
-// MUDANÇAS v2.3 (vs v2.2):
+// MUDANÇAS v2.4 (vs v2.3):
+//   SESSÃO 3.5 FASE 2 — Refator de cadastro:
+//     - REMOVIDO: cadastro/edição/exclusão de influencer (movido pra
+//       aba dedicada 👤 Influencers via InfluencerManager.jsx)
+//     - REMOVIDO: STAGE.INFLUENCER_NEW (tela inteira)
+//     - REMOVIDO: state vars (newInfName, newInfPhoto, newInfAnalysis,
+//       analyzing, analyzeError, editingInfluencer)
+//     - REMOVIDO: handlers (handleNewInfPhotoUpload, handleSaveNewInfluencer,
+//       handleDeleteInfluencer, handleEditInfluencer)
+//     - REMOVIDO: imports (analyzeFace, saveVtonProfile, deleteVtonProfile)
+//     - MANTIDO: STAGE.INFLUENCER_LIST como tela de SELEÇÃO (sem mais
+//       botões "+ Nova"/"Editar"/"Deletar"). Hint visual aponta pra
+//       aba Influencers no topo.
+//     - RESULTADO: VtonStudio focado APENAS em geração de vídeo.
+//       ~165 linhas a menos. Fonte única de cadastro = aba Influencers.
+//       Cassandra/Lígia continuam funcionando (mesmo localStorage key).
+//
+// MUDANÇAS v2.3 (mantidas):
 //   TÓPICO C — Foto produto em 9:16:
 //     - className="upload-area" trocado por "upload-area-9-16" nos 2 uploads
 //       de produto (frontal e costas) no STAGE.PRODUCT_UPLOAD
@@ -41,7 +58,6 @@
 import { useState, useEffect } from 'react';
 import {
   uploadToFal,
-  analyzeFace,
   analyzeProductVton,
   generateVtonRoteiros,    // v2.0
   generateBackPromptVton,  // v2.0
@@ -51,8 +67,6 @@ import {
   generateVideo,
   checkVideoStatus,
   getVtonProfiles,
-  saveVtonProfile,
-  deleteVtonProfile,
 } from './api.js';
 
 // Helper de compressão de imagem (resolve fotos grandes que estouram Claude API)
@@ -165,8 +179,7 @@ function copyAndOpenTabs(text, urls) {
 
 // Estágios do fluxo VTON v2.3
 const STAGE = {
-  INFLUENCER_LIST:      'influencer_list',       // home: lista de influencers
-  INFLUENCER_NEW:       'influencer_new',        // cadastrar/editar
+  INFLUENCER_LIST:      'influencer_list',       // home: lista de influencers (só seleção, sem cadastro)
   PRODUCT_UPLOAD:       'product_upload',        // upload produto
   ANALYZING_PRODUCT:    'analyzing_product',     // Claude analisa produto + cenários
   ROTEIROS:             'roteiros',              // 3 roteiros — usuário SELECIONA 1
@@ -183,14 +196,8 @@ export default function VtonStudio() {
   const [stage, setStage] = useState(STAGE.INFLUENCER_LIST);
   const [profiles, setProfiles] = useState([]);
   const [selectedInfluencer, setSelectedInfluencer] = useState(null);
-  const [editingInfluencer, setEditingInfluencer] = useState(null);
 
-  // Cadastro de influencer
-  const [newInfName, setNewInfName] = useState('');
-  const [newInfPhoto, setNewInfPhoto] = useState(null);
-  const [newInfAnalysis, setNewInfAnalysis] = useState(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analyzeError, setAnalyzeError] = useState(null);
+  // (v2.4) Estados de cadastro removidos — ver aba 👤 Influencers
 
   // Produto
   const [productName, setProductName] = useState('');
@@ -246,77 +253,9 @@ export default function VtonStudio() {
   // CADASTRO DE INFLUENCER (mesmo de v1.2)
   // ──────────────────────────────────────────────────────
 
-  async function handleNewInfPhotoUpload(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const data = await compressImage(file, 1280, 0.85);
-      setNewInfPhoto(data);
-      setAnalyzeError(null);
-      setNewInfAnalysis(null);
-
-      setAnalyzing(true);
-      const analysis = await analyzeFace({
-        faceBase64: data.base64,
-        faceMimeType: data.mimeType,
-      });
-      setNewInfAnalysis(analysis);
-    } catch (err) {
-      console.error('[VTON] analyze face error:', err);
-      setAnalyzeError(err.message || 'Erro ao analisar foto');
-    } finally {
-      setAnalyzing(false);
-    }
-  }
-
-  function handleSaveNewInfluencer() {
-    if (!newInfName.trim() || !newInfPhoto || !newInfAnalysis) return;
-    const profile = {
-      id: editingInfluencer?.id || `vton_${Date.now()}`,
-      name: newInfName.trim(),
-      facePhoto: {
-        base64: newInfPhoto.base64,
-        mimeType: newInfPhoto.mimeType,
-        preview: newInfPhoto.preview,
-      },
-      hair: newInfAnalysis.hair,
-      ageHint: newInfAnalysis.ageHint,
-      vibe: newInfAnalysis.vibe,
-      signature: newInfAnalysis.signature,
-      bodyHint: editingInfluencer?.bodyHint || null,
-      createdAt: editingInfluencer?.createdAt || new Date().toISOString(),
-    };
-    const updated = saveVtonProfile(profile);
-    setProfiles(updated);
-    setNewInfName('');
-    setNewInfPhoto(null);
-    setNewInfAnalysis(null);
-    setEditingInfluencer(null);
-    setStage(STAGE.INFLUENCER_LIST);
-  }
-
-  function handleDeleteInfluencer(id) {
-    if (!confirm('Deletar essa influencer?')) return;
-    const updated = deleteVtonProfile(id);
-    setProfiles(updated);
-  }
-
-  function handleEditInfluencer(profile) {
-    setEditingInfluencer(profile);
-    setNewInfName(profile.name);
-    setNewInfPhoto({
-      base64: profile.facePhoto.base64,
-      mimeType: profile.facePhoto.mimeType,
-      preview: profile.facePhoto.preview,
-    });
-    setNewInfAnalysis({
-      hair: profile.hair,
-      ageHint: profile.ageHint,
-      vibe: profile.vibe,
-      signature: profile.signature,
-    });
-    setStage(STAGE.INFLUENCER_NEW);
-  }
+  // (v2.4) Funções de cadastro removidas — agora vivem em InfluencerManager.jsx
+  // (handleNewInfPhotoUpload, handleSaveNewInfluencer, handleDeleteInfluencer,
+  // handleEditInfluencer foram extraídas pra aba 👤 Influencers)
 
   // ──────────────────────────────────────────────────────
   // PRODUTO + GERAÇÃO DE ROTEIROS
@@ -946,7 +885,7 @@ export default function VtonStudio() {
 
   // ─── Barra superior fixa de progresso (visível na maioria dos estágios)
   function ProgressBar() {
-    if ([STAGE.INFLUENCER_LIST, STAGE.INFLUENCER_NEW].includes(stage)) return null;
+    if (stage === STAGE.INFLUENCER_LIST) return null;
 
     // 🆕 v2.3: ProgressBar agora reflete 7 etapas (era 6) por causa do PROMPT_VIDEO
     const stageLabel = {
@@ -1002,20 +941,18 @@ export default function VtonStudio() {
           <p className="subtitle">Pipeline com aprovação por etapa · Encadeamento serial</p>
         </div>
         <div className="card">
-          <div className="card-header-row">
-            <h3 className="card-title">Influencers cadastradas ({profiles.length})</h3>
-            <button
-              className="back-btn"
-              onClick={() => {
-                setEditingInfluencer(null);
-                setNewInfName('');
-                setNewInfPhoto(null);
-                setNewInfAnalysis(null);
-                setStage(STAGE.INFLUENCER_NEW);
-              }}
-            >+ Nova</button>
-          </div>
-          {profiles.length === 0 && (<p className="hint">Cadastra a primeira influencer pra começar.</p>)}
+          <h3 className="card-title">Selecionar influencer ({profiles.length} cadastrada{profiles.length !== 1 ? 's' : ''})</h3>
+          <p className="hint" style={{marginBottom: 14, fontSize: 12}}>
+            👤 Pra cadastrar/editar/deletar, vai pra aba <strong>Influencers</strong> no topo da página.
+          </p>
+          {profiles.length === 0 && (
+            <div style={{padding: 28, textAlign: 'center'}}>
+              <p className="hint" style={{marginBottom: 8}}>📭 Nenhuma influencer cadastrada ainda.</p>
+              <p className="hint" style={{fontSize: 12}}>
+                Vai pra aba <strong>👤 Influencers</strong> no topo pra cadastrar a primeira.
+              </p>
+            </div>
+          )}
           {profiles.map(p => (
             <div
               key={p.id}
@@ -1028,22 +965,12 @@ export default function VtonStudio() {
                   {p.facePhoto?.preview ? <img src={p.facePhoto.preview} alt={p.name} /> : '👤'}
                 </div>
                 <div className="inf-info">
-                  <div className="inf-name">{p.name}</div>
+                  <div className="inf-name">
+                    {p.gender === 'male' ? '👨' : '👩'} {p.name}
+                  </div>
                   <div className="inf-hint">{p.hair?.color || '?'} · {p.vibe || '?'}</div>
                 </div>
-                <div style={{display: 'flex', gap: 6}}>
-                  <button
-                    className="back-btn"
-                    onClick={e => { e.stopPropagation(); handleEditInfluencer(p); }}
-                    style={{fontSize: 11, padding: '4px 10px'}}
-                  >Editar</button>
-                  <button
-                    className="back-btn"
-                    onClick={e => { e.stopPropagation(); handleDeleteInfluencer(p.id); }}
-                    style={{fontSize: 11, padding: '4px 10px', color: '#ff8888'}}
-                  >Deletar</button>
-                  <span className="inf-arrow">›</span>
-                </div>
+                <span className="inf-arrow">›</span>
               </div>
             </div>
           ))}
@@ -1052,55 +979,9 @@ export default function VtonStudio() {
     );
   }
 
-  // STAGE 2: Cadastrar/editar influencer
-  if (stage === STAGE.INFLUENCER_NEW) {
-    return (
-      <div className="container">
-        <button className="back-btn" onClick={() => setStage(STAGE.INFLUENCER_LIST)} style={{marginBottom: 14}}>← Voltar</button>
-        <div className="header">
-          <h1 className="title">{editingInfluencer ? 'Editar Influencer' : 'Nova Influencer'}</h1>
-          <p className="subtitle">Cadastro mínimo: 1 foto de rosto bem iluminada</p>
-        </div>
-        <div className="card">
-          <h3 className="card-title">Dados básicos</h3>
-          <div className="field">
-            <label>Nome</label>
-            <input type="text" value={newInfName} onChange={e => setNewInfName(e.target.value)} placeholder="Ex: Aline" />
-          </div>
-          <div className="field">
-            <label>Foto de rosto (close-up bem iluminado)</label>
-            <label className="upload-area">
-              {newInfPhoto?.preview ? <img src={newInfPhoto.preview} alt="rosto" /> : <span>📸 Clica pra subir</span>}
-              <input type="file" accept="image/*" onChange={handleNewInfPhotoUpload} style={{display: 'none'}} />
-            </label>
-          </div>
-          {analyzing && (
-            <div className="loading-screen" style={{minHeight: 120, padding: 20}}>
-              <div className="spinner"></div>
-              <div className="loading-sub">Claude analisando rosto...</div>
-            </div>
-          )}
-          {analyzeError && (<div className="error-box"><p>{analyzeError}</p></div>)}
-          {newInfAnalysis && (
-            <div className="card" style={{marginTop: 12, background: 'rgba(212,165,116,0.05)'}}>
-              <h3 className="card-title">Análise automática</h3>
-              <div className="field"><label>Cabelo</label><div style={{fontSize: 13, color: 'var(--t2)'}}>{newInfAnalysis.hair.color} · {newInfAnalysis.hair.texture} · {newInfAnalysis.hair.length}</div></div>
-              <div className="field"><label>Idade aparente</label><div style={{fontSize: 13, color: 'var(--t2)'}}>{newInfAnalysis.ageHint}</div></div>
-              <div className="field"><label>Vibe</label><div style={{fontSize: 13, color: 'var(--t2)'}}>{newInfAnalysis.vibe}</div></div>
-              <div className="field"><label>Pele</label><div style={{fontSize: 13, color: 'var(--t2)'}}>{newInfAnalysis.signature.skin}</div></div>
-              {newInfAnalysis.signature.accent && (<div className="field"><label>Sinal distintivo</label><div style={{fontSize: 13, color: 'var(--t2)'}}>{newInfAnalysis.signature.accent}</div></div>)}
-            </div>
-          )}
-          <button
-            className="main-btn"
-            onClick={handleSaveNewInfluencer}
-            disabled={!newInfName.trim() || !newInfPhoto || !newInfAnalysis || analyzing}
-            style={{marginTop: 20}}
-          >{editingInfluencer ? 'Salvar alterações' : 'Cadastrar influencer'}</button>
-        </div>
-      </div>
-    );
-  }
+  // STAGE 2 (v2.4) — REMOVIDO: cadastrar/editar influencer agora é feito na aba 👤 Influencers
+  // (v2.4) STAGE.INFLUENCER_NEW UI inteira REMOVIDA
+  // Cadastro/edição agora é feito na aba 👤 Influencers (InfluencerManager.jsx)
 
   // STAGE 3: Upload do produto
   if (stage === STAGE.PRODUCT_UPLOAD) {
