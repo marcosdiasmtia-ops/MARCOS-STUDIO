@@ -1,6 +1,22 @@
-// src/UgcStudio.jsx (v1.1 — Sessão 3.5 Fase 3: integração com aba Influencers)
+// src/UgcStudio.jsx (v1.2 — Sessão 4: Output polish + Galeria + Tutorial Veo + Transcrição viral)
 //
-// MUDANÇAS v1.1 (vs v1.0):
+// MUDANÇAS v1.2 (vs v1.1):
+//   SESSÃO 4 — Polish completo:
+//     FASE A — Step 7 (Output) polido + Tutorial Veo:
+//       - ResultsView completamente reescrito com cards visuais
+//       - Botão "📋 Copiar tudo" (junta script + descrição + hashtags formatado)
+//       - Botão "↻ Gerar novamente" (re-roda pipeline com mesmas configs)
+//       - Tutorial Veo Studio integrado (card destacado com 5 passos)
+//       - Frame inicial com botão "📥 Baixar imagem"
+//     FASE B — Galeria de variações 1-clique:
+//       - 4 botões: 🎭 Outro estilo · 📍 Outro cenário · 📷 Outra câmera · 🔄 Mesmo tudo
+//       - Volta pro step apropriado mantendo o resto da config
+//     FASE C — Transcrição viral como base (diferencial vs Trendly):
+//       - Campo collapsível no Step 2 ("📋 Tem transcrição viral pra inspirar?")
+//       - Quando preenchido, passa via `viralTranscript` pro endpoint ugc-script
+//       - Claude usa como estrutura emocional/narrativa, sem copiar literal
+//
+// MUDANÇAS v1.1 (mantidas — Sessão 3.5 Fase 3):
 //   SESSÃO 3.5 FASE 3 — Integração com aba dedicada de cadastro:
 //     - Recebe prop `onSwitchTab` (passada pelo App.jsx desde a Fase 1)
 //     - Step 1 ganha botão "+ Nova Influencer" → vai pra aba 👤 Influencers
@@ -102,6 +118,9 @@ export default function UgcStudio({ onSwitchTab }) {
     photoFile: null,
     photoPreviewUrl: null, // URL local pra preview (URL.createObjectURL)
   });
+
+  // Step 2 — transcrição viral opcional (Fase C — diferencial vs Trendly)
+  const [viralTranscript, setViralTranscript] = useState('');
 
   // Steps 3-5 — config de geração
   const [styleId, setStyleId] = useState(null);
@@ -278,6 +297,7 @@ export default function UgcStudio({ onSwitchTab }) {
         styleId,
         durationId,
         categoryId: productData.categoryId,
+        viralTranscript: viralTranscript?.trim() || undefined, // Fase C
       });
 
       // 5. Gera prompts EN com 8 blocos via Claude Sonnet 4
@@ -366,7 +386,12 @@ export default function UgcStudio({ onSwitchTab }) {
         />
       )}
       {step === 2 && (
-        <Step2Product data={productData} setData={setProductData} />
+        <Step2Product
+          data={productData}
+          setData={setProductData}
+          viralTranscript={viralTranscript}
+          setViralTranscript={setViralTranscript}
+        />
       )}
       {step === 3 && (
         <Step3Style
@@ -414,9 +439,31 @@ export default function UgcStudio({ onSwitchTab }) {
       {step === 7 && (
         <ResultsView
           results={results}
+          generating={generating}
+          progressMsg={progressMsg}
           onBack={() => {
             setStep(6);
             setResults(null);
+          }}
+          // Fase B — Galeria de variações 1-clique
+          onVariationStyle={() => {
+            setResults(null);
+            setStyleId(null); // força re-escolha
+            setStep(3);
+          }}
+          onVariationScenario={() => {
+            setResults(null);
+            setScenarioId(DEFAULT_SCENARIO_ID); // reset pro default, força re-escolha
+            setStep(4);
+          }}
+          onVariationCamera={() => {
+            setResults(null);
+            setCameraId(DEFAULT_CAMERA_ID); // reset pro default
+            setStep(4);
+          }}
+          onRegenerateAll={() => {
+            setResults(null);
+            handleGenerate();
           }}
         />
       )}
@@ -607,7 +654,9 @@ function Step1Influencer({ influencers, selected, onSelect, onRefresh, onSwitchT
 // STEP 2 — Dados do Produto
 // ═══════════════════════════════════════════════════════════════════════
 
-function Step2Product({ data, setData }) {
+function Step2Product({ data, setData, viralTranscript, setViralTranscript }) {
+  const [showViral, setShowViral] = useState(!!viralTranscript);
+
   function update(field, value) {
     setData({ ...data, [field]: value });
   }
@@ -716,6 +765,75 @@ function Step2Product({ data, setData }) {
               border: '1px solid var(--bd)',
             }}
           />
+        )}
+      </div>
+
+      {/* Fase C — Transcrição viral como base (diferencial vs Trendly) */}
+      <div
+        style={{
+          marginTop: 16,
+          padding: 14,
+          background: showViral ? 'var(--bg)' : 'transparent',
+          border: '1px dashed var(--bd)',
+          borderRadius: 10,
+        }}
+      >
+        <button
+          onClick={() => setShowViral(!showViral)}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--g)',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            width: '100%',
+            textAlign: 'left',
+          }}
+        >
+          <span>{showViral ? '➖' : '➕'}</span>
+          <span>Tem transcrição viral pra inspirar? (opcional)</span>
+          {viralTranscript && !showViral && (
+            <span
+              style={{
+                fontSize: 10,
+                background: 'var(--gd)',
+                color: 'var(--g)',
+                padding: '2px 8px',
+                borderRadius: 10,
+                marginLeft: 'auto',
+              }}
+            >
+              ✓ preenchido
+            </span>
+          )}
+        </button>
+        {showViral && (
+          <div style={{ marginTop: 12 }}>
+            <p
+              style={{
+                fontSize: 11,
+                color: 'var(--t2)',
+                marginTop: 0,
+                marginBottom: 8,
+                lineHeight: 1.4,
+              }}
+            >
+              💡 Cole transcrição de um vídeo TikTok que viralizou. Claude vai usar como{' '}
+              <strong>estrutura emocional/narrativa</strong> (sem copiar literal). Diferencial vs Trendly.
+            </p>
+            <textarea
+              style={{ ...S.input, minHeight: 90, resize: 'vertical' }}
+              value={viralTranscript}
+              onChange={(e) => setViralTranscript(e.target.value)}
+              placeholder='Ex: "Gente, eu não acredito que demorei tanto pra conhecer esse produto. Mudou minha rotina completamente..."'
+            />
+          </div>
         )}
       </div>
     </div>
@@ -1010,126 +1128,388 @@ function SummaryItem({ icon, label, value }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// STEP 7 — Resultados (output básico, polish na Sessão 4)
+// STEP 7 — Resultados (output polido — Sessão 4 Fase A + B)
 // ═══════════════════════════════════════════════════════════════════════
 
-function ResultsView({ results, onBack }) {
+function ResultsView({
+  results,
+  generating,
+  progressMsg,
+  onBack,
+  onVariationStyle,
+  onVariationScenario,
+  onVariationCamera,
+  onRegenerateAll,
+}) {
+  // Estado intermediário: gerando após click em variação 🔄 mesmo tudo
+  if (!results && generating) {
+    return (
+      <div style={S.stepBody}>
+        <h2 style={S.stepTitle}>♻️ Regenerando...</h2>
+        <div style={S.progress}>
+          <div style={S.spinner}>⏳</div>
+          <p>{progressMsg}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!results) return null;
   const { image, package: pkg, prompts, config } = results;
 
+  // Monta texto formatado pra "copiar tudo"
+  const fullPackText = formatFullPackage({ pkg, prompts, config });
+
   return (
     <div style={S.stepBody}>
-      <h2 style={S.stepTitle}>✨ Pronto! Pacote UGC Falante gerado</h2>
-      <p style={S.stepSubtitle}>
-        Frame inicial + roteiro + prompts Veo. Próximos passos manuais: levar pro Veo Studio (frame-to-video) e CapCut.
-      </p>
+      {/* Header de resultados com ações principais */}
+      <div style={S.resultsHeader}>
+        <div>
+          <h2 style={{ ...S.stepTitle, marginBottom: 4 }}>
+            ✨ Pacote UGC Falante pronto
+          </h2>
+          <p style={{ ...S.stepSubtitle, marginBottom: 0 }}>
+            {config?.influencer} · {config?.style} · {config?.duration} · {pkg?.script?.length || 0} take(s)
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <CopyButton
+            text={fullPackText}
+            label="📋 Copiar tudo"
+            primary
+          />
+          <button style={S.btnSecondary} onClick={onBack}>
+            ← Editar
+          </button>
+        </div>
+      </div>
 
-      <button style={S.btnSecondary} onClick={onBack}>
-        ← Voltar pra editar
-      </button>
+      {/* Galeria de variações 1-clique (Fase B) */}
+      <div style={S.variationsBar}>
+        <span style={S.variationsLabel}>♻️ Gerar variação:</span>
+        <button style={S.variationChip} onClick={onVariationStyle}>
+          🎭 Outro estilo
+        </button>
+        <button style={S.variationChip} onClick={onVariationScenario}>
+          📍 Outro cenário
+        </button>
+        <button style={S.variationChip} onClick={onVariationCamera}>
+          📷 Outra câmera
+        </button>
+        <button
+          style={{ ...S.variationChip, ...S.variationChipPrimary }}
+          onClick={onRegenerateAll}
+        >
+          🔄 Mesmo tudo
+        </button>
+      </div>
 
-      {/* Frame inicial */}
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>🎨 Frame inicial (use no Veo Studio)</h3>
+      {/* TUTORIAL VEO STUDIO (destacado) — Fase A */}
+      <div style={S.tutorialCard}>
+        <div style={S.tutorialHeader}>
+          <span style={{ fontSize: 20 }}>🎬</span>
+          <strong>Próximos passos no Veo Studio Ultra (manual)</strong>
+        </div>
+        <ol style={S.tutorialSteps}>
+          <li>
+            Abre o{' '}
+            <a
+              href="https://labs.google/fx/tools/flow"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--g)' }}
+            >
+              Veo Studio Ultra (Flow)
+            </a>
+          </li>
+          <li>
+            Faz upload do <strong>frame inicial</strong> abaixo (ou copia URL)
+          </li>
+          <li>
+            Cola o <strong>prompt do Take 1</strong> (lá embaixo) e gera o vídeo
+          </li>
+          <li>
+            <strong>"Save frame as asset"</strong> no último frame → use como starter do Take 2
+          </li>
+          <li>
+            Repete pros próximos takes ({pkg?.script?.length || 1} no total) →{' '}
+            <strong>concatena no CapCut</strong>
+          </li>
+        </ol>
+      </div>
+
+      {/* FRAME INICIAL */}
+      <div style={S.resultCard}>
+        <div style={S.resultCardHeader}>
+          <h3 style={S.resultTitle}>🎨 Frame inicial</h3>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {image?.imageUrl && (
+              <a
+                href={image.imageUrl}
+                download="frame_take1.png"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={S.copyBtn}
+              >
+                📥 Baixar
+              </a>
+            )}
+            <CopyButton text={image?.imageUrl || ''} label="📋 URL" />
+          </div>
+        </div>
         {image?.imageUrl && (
-          <>
-            <img src={image.imageUrl} alt="frame" style={S.resultImg} />
-            <CopyButton text={image.imageUrl} label="📋 Copiar URL da imagem" />
-          </>
+          <img src={image.imageUrl} alt="frame" style={S.resultImgLarge} />
         )}
       </div>
 
-      {/* Roteiro */}
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>📜 Roteiro ({pkg?.script?.length || 0} take(s))</h3>
-        {pkg?.script?.map((t) => (
-          <div key={t.takeNumber} style={S.takeBlock}>
-            <strong>
-              Take {t.takeNumber} ({t.wordCount}p, {t.durationSeconds}s)
-            </strong>
-            <p style={{ margin: '4px 0' }}>{t.fala}</p>
-            <CopyButton text={t.fala} label="copiar fala" />
+      {/* PROMPTS VEO (DESTAQUE PRINCIPAL — vai pro Veo Studio) — Fase A */}
+      <div style={{ ...S.resultCard, ...S.resultCardHighlight }}>
+        <div style={S.resultCardHeader}>
+          <h3 style={S.resultTitle}>
+            🎬 Prompts Veo 3 ({prompts?.prompts?.length || 0} take{prompts?.prompts?.length !== 1 ? 's' : ''})
+          </h3>
+          <span
+            style={{
+              fontSize: 11,
+              color: 'var(--g)',
+              fontWeight: 600,
+              background: 'var(--gd)',
+              padding: '4px 10px',
+              borderRadius: 10,
+            }}
+          >
+            ⭐ Cole no Veo Studio
+          </span>
+        </div>
+        {prompts?.prompts?.map((p) => (
+          <div key={p.takeNumber} style={S.veoTakeBlock}>
+            <div style={S.veoTakeHeader}>
+              <strong style={{ fontSize: 14, color: 'var(--g)' }}>
+                Take {p.takeNumber}
+              </strong>
+              <CopyButton
+                text={p.prompt}
+                label={`📋 Copiar Take ${p.takeNumber}`}
+                primary
+              />
+            </div>
+            <pre style={S.pre}>{p.prompt}</pre>
           </div>
         ))}
       </div>
 
-      {/* On-screen */}
-      {pkg?.onScreenPhrases?.length > 0 && (
-        <div style={S.resultBlock}>
-          <h3 style={S.resultTitle}>💬 Frases on-screen</h3>
-          {pkg.onScreenPhrases.map((p) => (
-            <div key={p.takeNumber}>
-              <strong>Take {p.takeNumber}:</strong> {p.phrase}{' '}
-              <CopyButton text={p.phrase} label="copiar" />
+      {/* ROTEIRO (PT-BR) */}
+      <div style={S.resultCard}>
+        <h3 style={S.resultTitle}>
+          📜 Roteiro PT-BR ({pkg?.script?.length || 0} take{pkg?.script?.length !== 1 ? 's' : ''})
+        </h3>
+        {pkg?.script?.map((t) => (
+          <div key={t.takeNumber} style={S.takeBlockNew}>
+            <div style={S.takeHeader}>
+              <strong>Take {t.takeNumber}</strong>
+              <span style={S.takeMeta}>
+                {t.wordCount} palavras · {t.durationSeconds}s
+              </span>
+              <div style={{ flex: 1 }} />
+              <CopyButton text={t.fala} label="📋 Copiar fala" />
             </div>
-          ))}
+            <p style={{ margin: '8px 0 0 0', fontSize: 14, lineHeight: 1.5 }}>
+              {t.fala}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* ON-SCREEN */}
+      {pkg?.onScreenPhrases?.length > 0 && (
+        <div style={S.resultCard}>
+          <h3 style={S.resultTitle}>
+            💬 Frases on-screen ({pkg.onScreenPhrases.length})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {pkg.onScreenPhrases.map((p) => (
+              <div key={p.takeNumber} style={S.onScreenChip}>
+                <span style={{ fontSize: 11, color: 'var(--t2)', fontWeight: 600 }}>
+                  TAKE {p.takeNumber}
+                </span>
+                <span style={{ flex: 1, fontWeight: 600 }}>{p.phrase}</span>
+                <CopyButton text={p.phrase} label="📋" />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Descrição + hashtags + música + CTAs */}
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>📝 Descrição TikTok</h3>
-        <p>{pkg?.description}</p>
-        <CopyButton text={pkg?.description || ''} label="copiar descrição" />
+      {/* DESCRIÇÃO TIKTOK */}
+      <div style={S.resultCard}>
+        <div style={S.resultCardHeader}>
+          <h3 style={S.resultTitle}>📝 Descrição TikTok</h3>
+          <CopyButton text={pkg?.description || ''} label="📋 Copiar" />
+        </div>
+        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>
+          {pkg?.description}
+        </p>
       </div>
 
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>🏷️ Hashtags</h3>
-        <p>{pkg?.hashtags?.join(' ')}</p>
-        <CopyButton
-          text={pkg?.hashtags?.join(' ') || ''}
-          label="copiar hashtags"
-        />
+      {/* HASHTAGS */}
+      <div style={S.resultCard}>
+        <div style={S.resultCardHeader}>
+          <h3 style={S.resultTitle}>🏷️ Hashtags ({pkg?.hashtags?.length || 0})</h3>
+          <CopyButton
+            text={pkg?.hashtags?.join(' ') || ''}
+            label="📋 Copiar todas"
+          />
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {pkg?.hashtags?.map((h, i) => (
+            <span key={i} style={S.hashtagChip}>
+              {h}
+            </span>
+          ))}
+        </div>
       </div>
 
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>🎵 Música sugerida</h3>
-        <pre style={S.pre}>{JSON.stringify(pkg?.musicSuggestion, null, 2)}</pre>
-      </div>
-
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>📢 CTAs (3 versões)</h3>
-        {pkg?.ctas && (
-          <>
-            <div>
-              <strong>Falado:</strong> {pkg.ctas.spoken}{' '}
-              <CopyButton text={pkg.ctas.spoken} label="copiar" />
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <strong>On-screen:</strong> {pkg.ctas.onScreen}{' '}
-              <CopyButton text={pkg.ctas.onScreen} label="copiar" />
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <strong>Escrito (post):</strong> {pkg.ctas.written}{' '}
-              <CopyButton text={pkg.ctas.written} label="copiar" />
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Prompts Veo */}
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>
-          🎬 Prompts Veo 3 — cole no Veo Studio (frame-to-video)
-        </h3>
-        {prompts?.prompts?.map((p) => (
-          <div key={p.takeNumber} style={S.takeBlock}>
-            <strong>Take {p.takeNumber}</strong>
-            <pre style={S.pre}>{p.prompt}</pre>
-            <CopyButton text={p.prompt} label={`📋 Copiar prompt Take ${p.takeNumber}`} />
+      {/* MÚSICA SUGERIDA */}
+      {pkg?.musicSuggestion && (
+        <div style={S.resultCard}>
+          <h3 style={S.resultTitle}>🎵 Música sugerida</h3>
+          <div style={S.musicGrid}>
+            <MusicItem label="Gênero" value={pkg.musicSuggestion.genre} />
+            <MusicItem label="Mood" value={pkg.musicSuggestion.mood} />
+            <MusicItem label="BPM" value={pkg.musicSuggestion.bpm} />
           </div>
-        ))}
-      </div>
+          {pkg.musicSuggestion.searchTerms?.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: 'var(--t2)',
+                  textTransform: 'uppercase',
+                  marginBottom: 6,
+                }}
+              >
+                Buscar no TikTok Sounds:
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {pkg.musicSuggestion.searchTerms.map((t, i) => (
+                  <span key={i} style={S.searchTermChip}>
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
-      <div style={S.resultBlock}>
-        <h3 style={S.resultTitle}>⚙️ Config usada</h3>
-        <pre style={S.pre}>{JSON.stringify(config, null, 2)}</pre>
+      {/* CTAs */}
+      {pkg?.ctas && (
+        <div style={S.resultCard}>
+          <h3 style={S.resultTitle}>📢 CTAs (3 versões)</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <CtaItem label="🗣️ Falado" text={pkg.ctas.spoken} />
+            <CtaItem label="💬 On-screen" text={pkg.ctas.onScreen} />
+            <CtaItem label="📝 Escrito (post)" text={pkg.ctas.written} />
+          </div>
+        </div>
+      )}
+
+      {/* CONFIG usada (collapsed por default — só pra debug) */}
+      <details style={{ ...S.resultCard, padding: 12 }}>
+        <summary
+          style={{
+            cursor: 'pointer',
+            fontSize: 13,
+            color: 'var(--t2)',
+            fontWeight: 600,
+          }}
+        >
+          ⚙️ Config técnica usada (clica pra expandir)
+        </summary>
+        <pre style={{ ...S.pre, marginTop: 10 }}>
+          {JSON.stringify(config, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function MusicItem({ label, value }) {
+  return (
+    <div style={S.musicItem}>
+      <div style={{ fontSize: 11, color: 'var(--t2)', textTransform: 'uppercase' }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>{value || '—'}</div>
+    </div>
+  );
+}
+
+function CtaItem({ label, text }) {
+  return (
+    <div style={S.ctaItem}>
+      <div style={{ fontSize: 11, color: 'var(--t2)', fontWeight: 600, marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <p style={{ margin: 0, fontSize: 14, flex: 1 }}>{text}</p>
+        <CopyButton text={text} label="📋" />
       </div>
     </div>
   );
 }
 
-function CopyButton({ text, label }) {
+// Helper: monta texto formatado pra "Copiar tudo"
+function formatFullPackage({ pkg, prompts, config }) {
+  const lines = [];
+  lines.push(`# UGC Falante — ${config?.product || 'produto'}`);
+  lines.push(`Influencer: ${config?.influencer} · Estilo: ${config?.style} · ${config?.duration}`);
+  lines.push('');
+  lines.push('## ROTEIRO');
+  pkg?.script?.forEach((t) => {
+    lines.push(`Take ${t.takeNumber} (${t.wordCount}p, ${t.durationSeconds}s):`);
+    lines.push(t.fala);
+    lines.push('');
+  });
+  if (pkg?.onScreenPhrases?.length) {
+    lines.push('## ON-SCREEN');
+    pkg.onScreenPhrases.forEach((p) =>
+      lines.push(`Take ${p.takeNumber}: ${p.phrase}`)
+    );
+    lines.push('');
+  }
+  lines.push('## DESCRIÇÃO TIKTOK');
+  lines.push(pkg?.description || '');
+  lines.push('');
+  lines.push('## HASHTAGS');
+  lines.push(pkg?.hashtags?.join(' ') || '');
+  lines.push('');
+  if (pkg?.musicSuggestion) {
+    lines.push('## MÚSICA');
+    lines.push(`${pkg.musicSuggestion.genre} · ${pkg.musicSuggestion.mood} · BPM ${pkg.musicSuggestion.bpm}`);
+    if (pkg.musicSuggestion.searchTerms?.length) {
+      lines.push(`Buscar: ${pkg.musicSuggestion.searchTerms.join(', ')}`);
+    }
+    lines.push('');
+  }
+  if (pkg?.ctas) {
+    lines.push('## CTAs');
+    lines.push(`Falado: ${pkg.ctas.spoken}`);
+    lines.push(`On-screen: ${pkg.ctas.onScreen}`);
+    lines.push(`Escrito: ${pkg.ctas.written}`);
+    lines.push('');
+  }
+  lines.push('---');
+  lines.push('## PROMPTS VEO 3 (cole 1 por vez no Veo Studio)');
+  prompts?.prompts?.forEach((p) => {
+    lines.push('');
+    lines.push(`### TAKE ${p.takeNumber}`);
+    lines.push(p.prompt);
+  });
+  return lines.join('\n');
+}
+
+function CopyButton({ text, label, primary }) {
   const [ok, setOk] = useState(false);
   return (
     <button
@@ -1138,7 +1518,7 @@ function CopyButton({ text, label }) {
         setOk(true);
         setTimeout(() => setOk(false), 1500);
       }}
-      style={S.copyBtn}
+      style={primary ? S.copyBtnPrimary : S.copyBtn}
     >
       {ok ? '✓ Copiado' : label || '📋 Copiar'}
     </button>
@@ -1391,5 +1771,188 @@ const S = {
     cursor: 'pointer',
     fontFamily: 'inherit',
     marginTop: 6,
+  },
+
+  // ── Sessão 4: estilos novos pro Step 7 polido ─────────────────────
+  copyBtnPrimary: {
+    background: 'var(--g)',
+    border: '1px solid var(--gb)',
+    color: 'var(--bg)',
+    padding: '6px 14px',
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  resultsHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    flexWrap: 'wrap',
+    marginBottom: 16,
+    paddingBottom: 16,
+    borderBottom: '1px solid var(--bd)',
+  },
+  variationsBar: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+    padding: 12,
+    background: 'var(--bg)',
+    border: '1px solid var(--bd)',
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  variationsLabel: {
+    fontSize: 12,
+    color: 'var(--t2)',
+    fontWeight: 600,
+    marginRight: 4,
+  },
+  variationChip: {
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    color: 'var(--t1)',
+    padding: '6px 12px',
+    borderRadius: 16,
+    fontSize: 12,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  variationChipPrimary: {
+    background: 'var(--gd)',
+    border: '1px solid var(--gb)',
+    color: 'var(--g)',
+    fontWeight: 600,
+  },
+  tutorialCard: {
+    background: 'var(--gd)',
+    border: '1px solid var(--gb)',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 16,
+  },
+  tutorialHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    color: 'var(--g)',
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  tutorialSteps: {
+    margin: 0,
+    paddingLeft: 24,
+    fontSize: 13,
+    lineHeight: 1.7,
+    color: 'var(--t1)',
+  },
+  resultCard: {
+    background: 'var(--bg)',
+    border: '1px solid var(--bd)',
+    borderRadius: 10,
+    padding: 16,
+    marginTop: 12,
+  },
+  resultCardHighlight: {
+    border: '2px solid var(--gb)',
+    background: 'var(--bg)',
+  },
+  resultCardHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 8,
+  },
+  resultImgLarge: {
+    maxWidth: '100%',
+    maxHeight: 480,
+    borderRadius: 8,
+    marginTop: 8,
+    display: 'block',
+  },
+  veoTakeBlock: {
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  veoTakeHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  takeBlockNew: {
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  takeHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  takeMeta: {
+    fontSize: 11,
+    color: 'var(--t2)',
+    background: 'var(--bg)',
+    padding: '2px 8px',
+    borderRadius: 8,
+  },
+  onScreenChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '8px 12px',
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    borderRadius: 8,
+    fontSize: 13,
+  },
+  hashtagChip: {
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    color: 'var(--g)',
+    padding: '4px 10px',
+    borderRadius: 12,
+    fontSize: 12,
+  },
+  musicGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+    gap: 8,
+    marginTop: 8,
+  },
+  musicItem: {
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    padding: 10,
+    borderRadius: 8,
+  },
+  searchTermChip: {
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    color: 'var(--t1)',
+    padding: '4px 10px',
+    borderRadius: 12,
+    fontSize: 11,
+    fontFamily: 'monospace',
+  },
+  ctaItem: {
+    padding: 10,
+    background: 'var(--bg2)',
+    border: '1px solid var(--bd)',
+    borderRadius: 8,
   },
 };
