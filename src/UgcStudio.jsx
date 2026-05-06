@@ -1,5 +1,14 @@
-// src/UgcStudio.jsx (v1.0 — Sessão 3 de codificação UGC Falante: UI Wizard)
+// src/UgcStudio.jsx (v1.1 — Sessão 3.5 Fase 3: integração com aba Influencers)
 //
+// MUDANÇAS v1.1 (vs v1.0):
+//   SESSÃO 3.5 FASE 3 — Integração com aba dedicada de cadastro:
+//     - Recebe prop `onSwitchTab` (passada pelo App.jsx desde a Fase 1)
+//     - Step 1 ganha botão "+ Nova Influencer" → vai pra aba 👤 Influencers
+//     - Empty state melhorado: botão funcional pra cadastrar a primeira
+//     - Cards do Step 1 mostram visual de gênero 👨/👩
+//     - Recommend voice usa influencer.gender (já com retrocompat 'female')
+//
+// MUDANÇAS v1.0 (mantidas):
 // Aba "UGC Falante" do MARCOS-STUDIO. Wizard de 6 passos pra gerar
 // vídeos UGC com lip-sync via Veo 3 frame-to-video.
 //
@@ -74,7 +83,7 @@ import {
 // COMPONENTE PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════
 
-export default function UgcStudio() {
+export default function UgcStudio({ onSwitchTab }) {
   // ── State do wizard ──────────────────────────────────────────────────
   const [step, setStep] = useState(1); // 1-6 input, 7 output
   const [error, setError] = useState(null);
@@ -353,6 +362,7 @@ export default function UgcStudio() {
           selected={influencer}
           onSelect={setInfluencer}
           onRefresh={() => setInfluencers(getVtonProfiles())}
+          onSwitchTab={onSwitchTab}
         />
       )}
       {step === 2 && (
@@ -492,31 +502,60 @@ function Header({ step, setStep }) {
 // STEP 1 — Selecionar Influencer
 // ═══════════════════════════════════════════════════════════════════════
 
-function Step1Influencer({ influencers, selected, onSelect, onRefresh }) {
+function Step1Influencer({ influencers, selected, onSelect, onRefresh, onSwitchTab }) {
+  // Empty state com CTA funcional pra aba Influencers
   if (!influencers.length) {
     return (
       <div style={S.stepBody}>
         <h2 style={S.stepTitle}>1. Selecionar influencer</h2>
         <div style={S.emptyState}>
-          <p>📭 Nenhuma influencer cadastrada.</p>
-          <p>
-            Vai pra aba <strong>🎥 VTON</strong> primeiro pra cadastrar uma.
-            Depois volta aqui.
+          <p style={{ fontSize: 16, marginBottom: 8 }}>📭 Nenhuma influencer cadastrada.</p>
+          <p style={{ marginBottom: 20 }}>
+            Cadastra a primeira na aba dedicada — depois ela aparece automaticamente
+            aqui e na aba VTON.
           </p>
+          {onSwitchTab && (
+            <button
+              style={{
+                ...S.btnPrimary,
+                background: 'var(--g)',
+                color: 'var(--bg)',
+                marginRight: 8,
+              }}
+              onClick={() => onSwitchTab('influencers')}
+            >
+              👤 Cadastrar primeira →
+            </button>
+          )}
           <button style={S.btnSecondary} onClick={onRefresh}>
-            🔄 Verificar novamente
+            🔄 Já cadastrei, atualizar
           </button>
         </div>
       </div>
     );
   }
+
+  // Lista normal com botão "+ Nova" no topo + visual gender nos cards
   return (
     <div style={S.stepBody}>
-      <h2 style={S.stepTitle}>1. Selecionar influencer</h2>
-      <p style={S.stepSubtitle}>
-        {influencers.length} cadastrada{influencers.length > 1 ? 's' : ''} · usa
-        os mesmos perfis da aba VTON
-      </p>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <h2 style={S.stepTitle}>1. Selecionar influencer</h2>
+          <p style={S.stepSubtitle}>
+            {influencers.length} cadastrada{influencers.length > 1 ? 's' : ''} · fonte
+            única (aba 👤 Influencers)
+          </p>
+        </div>
+        {onSwitchTab && (
+          <button
+            style={S.btnSecondary}
+            onClick={() => onSwitchTab('influencers')}
+            title="Ir pra aba Influencers pra cadastrar/editar/deletar"
+          >
+            + Nova Influencer
+          </button>
+        )}
+      </div>
       <div style={S.cardsGrid}>
         {influencers.map((inf) => (
           <div
@@ -527,12 +566,36 @@ function Step1Influencer({ influencers, selected, onSelect, onRefresh }) {
               ...(selected?.id === inf.id ? S.cardActive : {}),
             }}
           >
-            {inf.facePhoto && (
-              <img src={inf.facePhoto} alt={inf.name} style={S.cardImg} />
+            {inf.facePhoto?.preview && (
+              <img src={inf.facePhoto.preview} alt={inf.name} style={S.cardImg} />
             )}
-            <div style={S.cardName}>{inf.name}</div>
+            <div style={S.cardName}>
+              {inf.gender === 'male' ? '👨' : '👩'} {inf.name}
+            </div>
             {inf.bodyHint && <div style={S.cardSub}>{inf.bodyHint}</div>}
-            {inf.vibe && <div style={S.cardMeta}>vibe: {inf.vibe}</div>}
+            {inf.vibe && (
+              <div style={S.cardMeta}>
+                vibe: {inf.vibe}
+                {inf.gender && (
+                  <span style={{ opacity: 0.7 }}>
+                    {' · '}
+                    {inf.gender === 'male' ? 'masc.' : 'fem.'}
+                  </span>
+                )}
+              </div>
+            )}
+            {!inf.gender && (
+              <div
+                style={{
+                  fontSize: 10,
+                  color: '#ffaa44',
+                  marginTop: 4,
+                }}
+                title="Perfil sem gênero — atualiza na aba Influencers pra recomendação de voz mais precisa"
+              >
+                ⚠️ sem gênero (default: feminino)
+              </div>
+            )}
           </div>
         ))}
       </div>
