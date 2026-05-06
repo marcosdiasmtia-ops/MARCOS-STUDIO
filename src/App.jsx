@@ -4,6 +4,7 @@ import { callClaude, generateContent, searchTrends, generateImage, generateBackP
 import ProfileManager from './ProfileManager';
 import VtonStudio from './VtonStudio';
 import UgcStudio from './UgcStudio';
+import InfluencerManager from './InfluencerManager';
 import './styles.css';
 
 const VIDEO_TYPES = [
@@ -699,12 +700,16 @@ Gere prompts visuais (imagem + vídeo). APENAS JSON.`;
 // ═══════════════════════════════════════════════════════════════════════
 // v4.0 — Tab switcher: Legacy (FLUX.2 pro) vs VTON (Nano Banana Pro)
 // v4.2 — Tab switcher ganha terceira aba: UGC Falante (Sessão 3 de codificação)
+// v4.3 — Tab switcher ganha quarta aba: 👤 Influencers (Sessão 3.5 Fase 1)
+//        Aba dedicada de cadastro/gerenciamento — fonte única de perfis,
+//        consumida por VTON e UGC Falante. Suporta gênero (M/F).
 // ═══════════════════════════════════════════════════════════════════════
 //
 // Wrapper que decide qual aba mostrar baseado em estado local.
 // A aba escolhida fica salva em localStorage pra sobreviver a reload.
 // Aba legacy continua intacta (LegacyApp). Aba VTON é o VtonStudio.
-// Aba UGC Falante é o novo UgcStudio (lip-sync via Veo 3).
+// Aba UGC Falante é o UgcStudio (lip-sync via Veo 3).
+// Aba Influencers é o InfluencerManager (cadastro centralizado).
 
 const TAB_KEY = 'marcos-studio-active-tab';
 
@@ -790,12 +795,30 @@ export default function App() {
         >
           🎤 UGC Falante
         </button>
+        <button
+          onClick={() => switchTab('influencers')}
+          style={{
+            background: tab === 'influencers' ? 'var(--gd)' : 'transparent',
+            border: tab === 'influencers' ? '1px solid var(--gb)' : '1px solid var(--bd)',
+            color: tab === 'influencers' ? 'var(--g)' : 'var(--t2)',
+            padding: '8px 18px',
+            borderRadius: 20,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            transition: 'all 0.2s',
+          }}
+        >
+          👤 Influencers
+        </button>
       </div>
 
       {/* Conteúdo da aba selecionada */}
       {tab === 'legacy' && <LegacyApp />}
       {tab === 'vton' && <VtonStudio />}
-      {tab === 'ugc' && <UgcStudio />}
+      {tab === 'ugc' && <UgcStudio onSwitchTab={switchTab} />}
+      {tab === 'influencers' && <InfluencerManager />}
     </div>
   );
 }
