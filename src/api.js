@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v4.2 — adds UGC Falante asset helpers)
+// API helper functions for all backend calls (v4.3 — adds Avatar IA influencer-type helpers)
 //
 // CHANGELOG:
 // v3.0 — dual-photo analyzeIdentity + facePrompt pipeline (legacy/FLUX.2 pro)
@@ -13,6 +13,10 @@
 //   - generateUgcImageBase → /api/ugc-image-base
 //   - generateUgcScript    → /api/ugc-script
 //   - generateUgcVeoPrompt → /api/ugc-veo-prompt
+// v4.3 — Avatar IA Sessão 1 (Lote C — influencer-type helpers):
+//   - getRealInfluencers   → filtra profiles type !== 'avatar' (inclui legacy sem type)
+//   - getAiAvatars         → filtra profiles type === 'avatar'
+//   - Sem novo endpoint nem nova localStorage key (reusa marcos-studio-vton-profiles)
 //
 // Adiciona também:
 //   - getVtonProfiles, saveVtonProfile, deleteVtonProfile (storage separado
@@ -435,6 +439,25 @@ export function deleteVtonProfile(id) {
   const profiles = getVtonProfiles().filter(p => p.id !== id);
   localStorage.setItem(VTON_PROFILES_KEY, JSON.stringify(profiles));
   return profiles;
+}
+
+// ══════════ Influencer-type filters (v4.3 — Avatar IA Sessão 1) ══════════
+// Mesma localStorage key (single source of truth — Decisão #8 da arquitetura
+// Avatar IA). Usa o discriminador `type` no profile:
+//   - type === 'avatar'  → Avatar IA (gerado do zero pelo wizard)
+//   - type !== 'avatar'  → Influencer Real (foto real subida) — incluindo
+//                          profiles legacy sem campo `type` (default = real)
+//
+// Retrocompat: profiles antigos (Cassandra, Lígia) não têm `type`. Default
+// pra 'real' garantindo zero migração de dados (mesma lógica que a Sessão 3.5
+// fez com `gender`).
+
+export function getRealInfluencers() {
+  return getVtonProfiles().filter(p => p.type !== 'avatar');
+}
+
+export function getAiAvatars() {
+  return getVtonProfiles().filter(p => p.type === 'avatar');
 }
 
 // ═══════════════════════════════════════════════════════════════════════
