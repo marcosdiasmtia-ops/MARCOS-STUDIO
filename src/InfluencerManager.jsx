@@ -1,4 +1,10 @@
-// src/InfluencerManager.jsx (v2.0 — Avatar IA Sessão 3: integra AvatarChoiceModal + badges de tipo)
+// src/InfluencerManager.jsx (v2.1 — Avatar IA Sessão 3 FINAL: conecta AvatarWizard)
+//
+// MUDANÇAS v2.1 (vs v2.0):
+//   - Caminho "Avatar IA" agora abre o AvatarWizard REAL (não mais placeholder)
+//   - Substitui renderAvatarPlaceholder por renderAvatarWizard
+//   - View ID: 'avatar-placeholder' → 'avatar-wizard'
+//   - Após save no wizard → onSaved callback recarrega a lista
 //
 // MUDANÇAS v2.0 (vs v1.0):
 //   - Botão "+ Nova Influencer" agora abre AvatarChoiceModal (2 caminhos)
@@ -48,6 +54,7 @@ import {
   deleteVtonProfile,
 } from './api';
 import AvatarChoiceModal from './AvatarChoiceModal';
+import AvatarWizard from './AvatarWizard';
 
 // ═══════════════════════════════════════════════════════════════════════
 // HELPER: compressImage (extraído de VtonStudio, idêntico)
@@ -96,7 +103,7 @@ async function compressImage(file, maxDim = 1280, quality = 0.85) {
 
 export default function InfluencerManager() {
   const [profiles, setProfiles] = useState([]);
-  const [view, setView] = useState('list'); // 'list' | 'form' | 'avatar-placeholder'
+  const [view, setView] = useState('list'); // 'list' | 'form' | 'avatar-wizard'
   const [editing, setEditing] = useState(null); // perfil em edição (null = novo)
   const [showChoiceModal, setShowChoiceModal] = useState(false); // v2.0 — modal de escolha
 
@@ -140,11 +147,9 @@ export default function InfluencerManager() {
     setView('form');
   }
 
-  // v2.0: caminho "Avatar IA" → placeholder até o AvatarWizard ser entregue
-  // no commit 3/3 da Sessão 3. Quando wizard estiver pronto, troca pra
-  // setView('avatar-wizard') e remove o placeholder do render.
+  // v2.1: caminho "Avatar IA" → abre o AvatarWizard real
   function chooseAvatarPath() {
-    setView('avatar-placeholder');
+    setView('avatar-wizard');
   }
 
   function startEdit(profile) {
@@ -223,45 +228,22 @@ export default function InfluencerManager() {
 
   // ── Render ───────────────────────────────────────────────────────────
   if (view === 'form') return renderForm();
-  if (view === 'avatar-placeholder') return renderAvatarPlaceholder();
+  if (view === 'avatar-wizard') return renderAvatarWizard();
   return renderList();
 
-  // v2.0: tela temporária mostrada quando user escolhe "Avatar IA" no modal.
-  // Será substituída pelo AvatarWizard.jsx no próximo commit (3/3 da Sessão 3).
-  function renderAvatarPlaceholder() {
+  // v2.1: monta o AvatarWizard real (substitui o placeholder da v2.0).
+  // - onCancel: usuário clicou Cancelar/ESC → volta pra lista
+  // - onSaved: avatar salvo → recarrega lista do localStorage e volta
+  function renderAvatarWizard() {
     return (
-      <div className="container">
-        <div className="header">
-          <span className="badge">Influencers · v2.0</span>
-          <h1 className="title">✨ Avatar IA</h1>
-        </div>
-        <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-          <div style={{ fontSize: 56, marginBottom: 16 }}>🚧</div>
-          <h3 style={{ marginBottom: 8 }}>Em construção</h3>
-          <p className="hint" style={{ marginBottom: 8, lineHeight: 1.5 }}>
-            O AvatarWizard será entregue no próximo commit
-            <br />
-            (arquivo 3/3 da Sessão 3).
-          </p>
-          <p className="hint" style={{ fontSize: 12, opacity: 0.7, marginBottom: 24 }}>
-            Por enquanto, volte e use "Cadastrar Influencer Real".
-          </p>
-          <button
-            className="back-btn"
-            onClick={() => setView('list')}
-          >
-            ← Voltar
-          </button>
-        </div>
-
-        {/* AvatarChoiceModal pra esse render-branch também (caso reabra) */}
-        <AvatarChoiceModal
-          isOpen={showChoiceModal}
-          onClose={() => setShowChoiceModal(false)}
-          onChooseReal={chooseRealPath}
-          onChooseAvatar={chooseAvatarPath}
-        />
-      </div>
+      <AvatarWizard
+        onCancel={() => setView('list')}
+        onSaved={(profile) => {
+          // Recarrega profiles do localStorage (que o wizard acabou de salvar)
+          setProfiles(getVtonProfiles());
+          setView('list');
+        }}
+      />
     );
   }
 
@@ -269,7 +251,7 @@ export default function InfluencerManager() {
     return (
       <div className="container">
         <div className="header">
-          <span className="badge">Influencers · v2.0</span>
+          <span className="badge">Influencers · v2.1</span>
           <h1 className="title">👤 Cadastro de Influencers</h1>
           <p className="subtitle">
             Gerencie suas influencers · disponíveis em todas as abas (VTON, UGC Falante)
