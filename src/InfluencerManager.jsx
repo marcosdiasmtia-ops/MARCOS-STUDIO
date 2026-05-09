@@ -1,4 +1,19 @@
-// src/InfluencerManager.jsx (v1.0 — Sessão 3.5: aba dedicada de cadastro)
+// src/InfluencerManager.jsx (v2.0 — Avatar IA Sessão 3: integra AvatarChoiceModal + badges de tipo)
+//
+// MUDANÇAS v2.0 (vs v1.0):
+//   - Botão "+ Nova Influencer" agora abre AvatarChoiceModal (2 caminhos)
+//   - Caminho 1: Real → fluxo atual de cadastro com analyzeFace (inalterado)
+//   - Caminho 2: Avatar IA → placeholder (será substituído pelo AvatarWizard
+//     no próximo commit 3/3 da Sessão 3)
+//   - Cards ganham badge visual de tipo (📸 Real / ✨ Avatar IA)
+//   - Retrocompat: profiles sem `type` → tratados como 'real' (Decisão #8)
+//
+// REFERÊNCIAS arquiteturais:
+//   - Decisão #1: badge naming "Avatar IA" vs "Real"
+//   - Decisão #8: mesma localStorage key, single source of truth
+//   - Decisão #10: o ChoiceModal é o ponto de entrada único
+//
+// VERSÃO ANTERIOR — comentários originais v1.0 abaixo:
 //
 // Aba "👤 Influencers" do MARCOS-STUDIO. Source of truth ÚNICA pra cadastro
 // de influencers, usada por todas as abas de geração de vídeo (VTON,
@@ -32,6 +47,7 @@ import {
   saveVtonProfile,
   deleteVtonProfile,
 } from './api';
+import AvatarChoiceModal from './AvatarChoiceModal';
 
 // ═══════════════════════════════════════════════════════════════════════
 // HELPER: compressImage (extraído de VtonStudio, idêntico)
@@ -80,8 +96,9 @@ async function compressImage(file, maxDim = 1280, quality = 0.85) {
 
 export default function InfluencerManager() {
   const [profiles, setProfiles] = useState([]);
-  const [view, setView] = useState('list'); // 'list' | 'form'
+  const [view, setView] = useState('list'); // 'list' | 'form' | 'avatar-placeholder'
   const [editing, setEditing] = useState(null); // perfil em edição (null = novo)
+  const [showChoiceModal, setShowChoiceModal] = useState(false); // v2.0 — modal de escolha
 
   // Form state
   const [name, setName] = useState('');
@@ -111,9 +128,23 @@ export default function InfluencerManager() {
     setView('list');
   }
 
+  // v2.0: startNew agora ABRE o modal de escolha em vez de ir direto pro form.
+  // Os callbacks chooseRealPath / chooseAvatarPath decidem o destino real.
   function startNew() {
+    setShowChoiceModal(true);
+  }
+
+  // v2.0: caminho "Real" → fluxo atual inalterado (form de cadastro com foto)
+  function chooseRealPath() {
     resetForm();
     setView('form');
+  }
+
+  // v2.0: caminho "Avatar IA" → placeholder até o AvatarWizard ser entregue
+  // no commit 3/3 da Sessão 3. Quando wizard estiver pronto, troca pra
+  // setView('avatar-wizard') e remove o placeholder do render.
+  function chooseAvatarPath() {
+    setView('avatar-placeholder');
   }
 
   function startEdit(profile) {
@@ -192,13 +223,53 @@ export default function InfluencerManager() {
 
   // ── Render ───────────────────────────────────────────────────────────
   if (view === 'form') return renderForm();
+  if (view === 'avatar-placeholder') return renderAvatarPlaceholder();
   return renderList();
+
+  // v2.0: tela temporária mostrada quando user escolhe "Avatar IA" no modal.
+  // Será substituída pelo AvatarWizard.jsx no próximo commit (3/3 da Sessão 3).
+  function renderAvatarPlaceholder() {
+    return (
+      <div className="container">
+        <div className="header">
+          <span className="badge">Influencers · v2.0</span>
+          <h1 className="title">✨ Avatar IA</h1>
+        </div>
+        <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+          <div style={{ fontSize: 56, marginBottom: 16 }}>🚧</div>
+          <h3 style={{ marginBottom: 8 }}>Em construção</h3>
+          <p className="hint" style={{ marginBottom: 8, lineHeight: 1.5 }}>
+            O AvatarWizard será entregue no próximo commit
+            <br />
+            (arquivo 3/3 da Sessão 3).
+          </p>
+          <p className="hint" style={{ fontSize: 12, opacity: 0.7, marginBottom: 24 }}>
+            Por enquanto, volte e use "Cadastrar Influencer Real".
+          </p>
+          <button
+            className="back-btn"
+            onClick={() => setView('list')}
+          >
+            ← Voltar
+          </button>
+        </div>
+
+        {/* AvatarChoiceModal pra esse render-branch também (caso reabra) */}
+        <AvatarChoiceModal
+          isOpen={showChoiceModal}
+          onClose={() => setShowChoiceModal(false)}
+          onChooseReal={chooseRealPath}
+          onChooseAvatar={chooseAvatarPath}
+        />
+      </div>
+    );
+  }
 
   function renderList() {
     return (
       <div className="container">
         <div className="header">
-          <span className="badge">Influencers · v1.0</span>
+          <span className="badge">Influencers · v2.0</span>
           <h1 className="title">👤 Cadastro de Influencers</h1>
           <p className="subtitle">
             Gerencie suas influencers · disponíveis em todas as abas (VTON, UGC Falante)
@@ -240,6 +311,22 @@ export default function InfluencerManager() {
                 <div className="inf-info">
                   <div className="inf-name">
                     {p.gender === 'male' ? '👨' : '👩'} {p.name}
+                    {/* v2.0: badge de tipo (Decisão #1) — retrocompat: sem type → 'real' */}
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        fontSize: 10,
+                        padding: '2px 6px',
+                        borderRadius: 10,
+                        fontWeight: 'normal',
+                        background: p.type === 'avatar' ? 'rgba(220,120,200,0.18)' : 'rgba(120,160,220,0.18)',
+                        color: p.type === 'avatar' ? '#dc78c8' : '#78a0dc',
+                        border: p.type === 'avatar' ? '1px solid rgba(220,120,200,0.4)' : '1px solid rgba(120,160,220,0.4)',
+                      }}
+                      title={p.type === 'avatar' ? 'Avatar gerado pelo wizard de IA' : 'Influencer real cadastrado por foto'}
+                    >
+                      {p.type === 'avatar' ? '✨ Avatar IA' : '📸 Real'}
+                    </span>
                     {!p.gender && (
                       <span
                         style={{
@@ -304,6 +391,14 @@ export default function InfluencerManager() {
             </div>
           )}
         </div>
+
+        {/* v2.0: modal de escolha "+ Nova Influencer" */}
+        <AvatarChoiceModal
+          isOpen={showChoiceModal}
+          onClose={() => setShowChoiceModal(false)}
+          onChooseReal={chooseRealPath}
+          onChooseAvatar={chooseAvatarPath}
+        />
       </div>
     );
   }
