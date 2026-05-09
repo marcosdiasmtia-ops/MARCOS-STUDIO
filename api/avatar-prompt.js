@@ -1,4 +1,12 @@
-// api/avatar-prompt.js (v1.0 — Avatar IA Sessão 2 — Claude Sonnet 4 monta JSON MIRR0R-style)
+// api/avatar-prompt.js (v1.1 — Avatar IA Sessão 3 PATCH — força framing FRONTAL)
+//
+// PATCH v1.1 (sobre v1.0):
+//   - Resolve "débito da Decisão #9": v1.0 gerava avatares CANDID lateral/3/4,
+//     incompatíveis com VTON e UGC Falante (que precisam de rosto frontal).
+//   - Força framing frontal MANTENDO o realismo (candid feel + skin texture +
+//     50mm + available daylight) — combinação compatível com pipeline downstream.
+//   - 4 mudanças cirúrgicas: schema.composition, system prompt requirement,
+//     buildEnglishPrompt reinforcement, header.
 //
 // Endpoint que recebe os dados RESOLVIDOS do wizard de Avatar IA e gera um
 // JSON descritivo no formato MIRR0R™ (curso novaera.ai), em inglês,
@@ -98,7 +106,7 @@ The schema is exactly:
     "style": "string — anti-generic style (candid, documentary, lifestyle)",
     "lens": "string — usually '50mm prime, f/2.8, shallow depth of field'",
     "lighting": "string — natural light source (window light, golden hour, soft daylight)",
-    "composition": "string — half-body or candid framing"
+    "composition": "string — REQUIRED: frontal headshot, face fully visible to camera, eye contact with lens, shoulders visible, slight 3/4 angle MAX (NEVER full profile, NEVER looking away, NEVER lateral)"
   },
   "background": {
     "setting": "string — neutral indoor or simple outdoor environment",
@@ -115,6 +123,7 @@ The schema is exactly:
 5. NO EMOJIS in the output.
 6. PRESERVE INPUT INTEGRITY: the input descriptions already use anti-generic vocabulary supplied by the system. Don't dilute them by adding "perfect" or "stunning" qualifiers.
 7. AVOID STEREOTYPES: when describing ethnicity, use the supplied traits literally — do NOT add cultural stereotypes (clothing, settings, etc.) that weren't in the input.
+8. FRAMING IS NON-NEGOTIABLE: the output WILL be used downstream for face-tracking video and virtual try-on. The composition MUST be a frontal headshot with face fully visible and eyes meeting the camera. Slight 3/4 angle is acceptable; full profile, side view, looking-away, or back-of-head views are FORBIDDEN. The candid/documentary feel comes from skin texture, expression, and lighting — NOT from looking away from the camera.
 
 Output the JSON object directly.`;
 
@@ -421,8 +430,8 @@ function buildEnglishPrompt(personaPrompt) {
   // Background
   if (background?.setting) parts.push(`Background: ${background.setting}, ${background.color || 'soft neutral tones'}.`);
 
-  // Reforço final anti-genérico
-  parts.push('Ultra-realistic candid photo. Documentary style. Real human texture. Aspect ratio 9:16.');
+  // Reforço final anti-genérico (v1.1: + framing frontal não-negociável)
+  parts.push('Ultra-realistic candid photo. Documentary style. Real human texture. Frontal headshot, face fully visible to camera, eyes meeting the lens, slight smile or relaxed expression. Slight 3/4 angle MAX, NOT a profile shot, NOT looking away. Aspect ratio 9:16.');
 
   return parts.join(' ');
 }
