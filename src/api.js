@@ -1,4 +1,4 @@
-// API helper functions for all backend calls (v4.3 — adds Avatar IA influencer-type helpers)
+// API helper functions for all backend calls (v4.4 — adds 3 Avatar IA generation helpers)
 //
 // CHANGELOG:
 // v3.0 — dual-photo analyzeIdentity + facePrompt pipeline (legacy/FLUX.2 pro)
@@ -17,6 +17,10 @@
 //   - getRealInfluencers   → filtra profiles type !== 'avatar' (inclui legacy sem type)
 //   - getAiAvatars         → filtra profiles type === 'avatar'
 //   - Sem novo endpoint nem nova localStorage key (reusa marcos-studio-vton-profiles)
+// v4.4 — Avatar IA Sessão 2 (geração — 3 endpoints novos):
+//   - generateAvatarPrompt → /api/avatar-prompt        (Claude Sonnet 4 → JSON MIRR0R)
+//   - generateAvatar       → /api/avatar-generate      (Nano Banana Pro 2× variações)
+//   - generateCardPreview  → /api/avatar-card-preview  (Nano Banana Pro 1 imagem preview)
 //
 // Adiciona também:
 //   - getVtonProfiles, saveVtonProfile, deleteVtonProfile (storage separado
@@ -458,6 +462,85 @@ export function getRealInfluencers() {
 
 export function getAiAvatars() {
   return getVtonProfiles().filter(p => p.type === 'avatar');
+}
+
+// ══════════ Avatar IA generation helpers (v4.4 — Sessão 2) ══════════
+// 3 helpers que ligam o frontend (Sessão 3 do plano) aos 3 endpoints
+// criados na Sessão 2 da arquitetura Avatar IA.
+//
+// Pipeline completo:
+//   1. AvatarWizard coleta dados → resolve via data files → chama generateAvatarPrompt
+//   2. /api/avatar-prompt devolve { personaPrompt, englishPrompt, validationWarnings }
+//   3. AvatarResult chama generateAvatar(englishPrompt) → recebe 2 imagens pra escolher
+//   4. Cards do wizard (Decisão #10) chamam generateCardPreview com prompt simples
+//
+// Custos: prompt ~$0.003 (Claude) · generate ~$0.10 (2 fotos) · cardPreview ~$0.05.
+
+// Resolve campos do wizard pra strings em inglês e chama Claude Sonnet 4
+// pra construir o JSON MIRR0R-style descritivo do avatar.
+//
+// Espera receber objeto JÁ resolvido (frontend faz lookup nos data files):
+//   { name, gender, age,
+//     ethnicityDescriptions: [...], skinToneDescription, bodyTypeDescription,
+//     eyeColorDescription, lipsDescription,
+//     hairStyleDescription, hairColorDescription, beardStyleDescription?,
+//     glassesDescription, piercingsDescriptions: [...],
+//     editorialLine?, signature?, niche? }
+//
+// Retorna: { personaPrompt, englishPrompt, validationWarnings }
+export async function generateAvatarPrompt(payload) {
+  const res = await fetch('/api/avatar-prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || `avatar-prompt failed: ${res.status}`);
+  }
+  return data;  // { personaPrompt, englishPrompt, validationWarnings }
+}
+
+// Recebe o englishPrompt (vindo de generateAvatarPrompt) e dispara o
+// Nano Banana Pro pra gerar 2 variações simultâneas (Decisão #6).
+//
+// Tempo típico: 30-60s (NÃO usar com loading bloqueante curto — usar progress).
+//
+// Retorna: { images: [{url, seed?}, {url, seed?}], prompt, requestId }
+export async function generateAvatar(englishPrompt, name) {
+  const res = await fetch('/api/avatar-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ englishPrompt, name }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || `avatar-generate failed: ${res.status}`);
+  }
+  return data;  // { images: [...], prompt, requestId }
+}
+
+// Gera 1 imagem preview pra um card do wizard (Decisão #5 revisada + #10).
+// Frontend monta um prompt curto descrevendo o atributo (ex: "candid headshot
+// of a Nordic woman with fair complexion, ..."), passa o aspectRatio desejado,
+// e o cacheKey só pra log.
+//
+// Default aspectRatio = '1:1' (cards quadrados). Outros: '3:4', '4:5', '9:16', etc.
+//
+// Tempo típico: 15-30s.
+//
+// Retorna: { url, seed, requestId, prompt }
+export async function generateCardPreview(prompt, aspectRatio = '1:1', cacheKey = null) {
+  const res = await fetch('/api/avatar-card-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, aspectRatio, cacheKey }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || `avatar-card-preview failed: ${res.status}`);
+  }
+  return data;  // { url, seed, requestId, prompt }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
