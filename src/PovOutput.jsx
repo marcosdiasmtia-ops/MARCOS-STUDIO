@@ -1,4 +1,11 @@
-// src/PovOutput.jsx (v1.0 — Sub-lote 3b.2 — pipeline + tela final)
+// src/PovOutput.jsx (v1.0.1 — Sub-lote 3b.2.1 — HOTFIX modo voiced)
+//
+// HOTFIX v1.0.1 (10/05/2026):
+//   ✅ Bug "silent mode only uses stage='start'" no modo voiced corrigido.
+//   ✅ A 3ª chamada do compose (merge-final) agora envia audioUrls também,
+//      pra backend detectar modo voiced corretamente.
+//   ✅ Sem esse fix, vídeo final sai SEM ÁUDIO mesmo em modo voiced
+//      (Kling + TTS rodavam, mas mesclagem final falhava com 400).
 //
 // Componente que recebe wizardData consolidado (do PovWizard) e:
 //   1. Dispara a pipeline POV completa (7 helpers em sequência/paralelo)
@@ -328,7 +335,10 @@ export default function PovOutput({ wizardData, onStartNew }) {
         if (!mergedAudioUrl) throw new Error('Compose stage 2 sem mergedAudioUrl');
 
         setStatusMessage('🔧 Mesclando vídeo + áudio (3/3)...');
-        const sub3 = await composePovFinal({ stage: 'merge-final', videoUrls, mergedVideoUrl, mergedAudioUrl });
+        // BUG FIX v1.0.1: passa audioUrls também na 3ª chamada pra backend
+        // detectar modo voiced (linha 106-114 do pov-compose-final.js).
+        // Sem audioUrls, backend interpreta como silent e rejeita stage='merge-final'.
+        const sub3 = await composePovFinal({ stage: 'merge-final', videoUrls, audioUrls, mergedVideoUrl, mergedAudioUrl });
         const r3 = await pollUntilComplete(sub3, { intervalMs: COMPOSE_POLL_INTERVAL_MS, maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS });
         finalUrl = r3?.video?.url;
       }
