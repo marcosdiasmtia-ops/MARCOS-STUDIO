@@ -1,6 +1,10 @@
-// API helper functions for all backend calls (v4.4 — adds 3 Avatar IA generation helpers)
+// API helper functions for all backend calls (v4.5 — adds 3 POV helpers do Lote A)
 //
 // CHANGELOG:
+// v4.5 — POV Sessão 2 Lote A (3 helpers Claude API):
+//   - recommendPovDefaults    → /api/pov-recommend       (sugere typeId/scenarioId/styleId/handsId)
+//   - generatePovScript       → /api/pov-script          (roteiro N takes + descrição/hashtags/CTA)
+//   - generatePovKlingPrompts → /api/pov-kling-prompts   (N prompts em inglês pro Kling 2.6 Pro)
 // v3.0 — dual-photo analyzeIdentity + facePrompt pipeline (legacy/FLUX.2 pro)
 // v4.0 — adiciona 4 helpers VTON novos:
 //   - analyzeFace          → /api/analyze-face
@@ -828,4 +832,120 @@ export async function generateUgcVeoPrompt(input) {
     throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
   }
   return data; // { prompts: [{takeNumber, prompt}, ...] }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// v4.5 — POV Sessão 2 Lote A (3 helpers Claude API)
+// Sugere defaults, gera roteiro e prompts pro Kling 2.6 Pro.
+// Backend: api/pov-recommend.js, api/pov-script.js, api/pov-kling-prompts.js
+// ════════════════════════════════════════════════════════════════════════
+
+/**
+ * Sugere defaults do wizard POV baseado no produto.
+ * Cai em fallback determinístico se Claude falhar (nunca lança erro de
+ * categoria — sempre devolve algo).
+ *
+ * @param {Object} input
+ * @param {string} input.categoryId — id de ugc-categories.js (ex: 'perfumes')
+ * @param {string} input.productName
+ * @param {string} [input.productDescription]
+ * @param {string} [input.productPhotoBase64] — opcional, ativa Vision
+ * @param {string} [input.productPhotoMimeType='image/jpeg']
+ * @param {'female'|'male'} [input.influencerGender='female']
+ * @param {'influencer'|'anonymous'} [input.handsMode='influencer']
+ * @returns {Promise<{recommendations: {typeId, scenarioId, styleId, handsId}, reasoning, source}>}
+ */
+export async function recommendPovDefaults(input) {
+  const res = await fetch('/api/pov-recommend', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('pov-recommend response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao recomendar defaults POV (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;
+}
+
+/**
+ * Gera o roteiro POV (N takes) + descrição/hashtags/CTA via Claude.
+ *
+ * @param {Object} input
+ * @param {string} input.productName
+ * @param {string} [input.productDescription]
+ * @param {string} [input.productPrice]
+ * @param {string} [input.productOriginalPrice]
+ * @param {string} [input.categoryId]
+ * @param {string} input.typeId       — id de pov-types.js
+ * @param {string} input.scenarioId   — id de pov-scenarios.js
+ * @param {string} input.styleId      — id de pov-styles.js
+ * @param {'20s'|'30s'|'40s'|'60s'} input.durationId
+ * @param {'silent'|'voiced'} [input.audioMode='silent']
+ * @param {string} [input.voiceId]    — obrigatório se audioMode='voiced'
+ * @param {Object} [input.influencer] — { name?, gender? }
+ * @param {Array}  [input.previousScripts]
+ * @param {string} [input.trendData]
+ * @returns {Promise<{audioMode, voiceId?, script: Array, description, hashtags, ctaWritten, source}>}
+ */
+export async function generatePovScript(input) {
+  const res = await fetch('/api/pov-script', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('pov-script response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar roteiro POV (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;
+}
+
+/**
+ * Gera N prompts em inglês pro Kling 2.6 Pro animar cada take.
+ *
+ * @param {Object} input
+ * @param {Array}  input.script       — saída do generatePovScript
+ * @param {string} input.typeId
+ * @param {string} input.scenarioId
+ * @param {string} input.styleId
+ * @param {Object} input.handsConfig  — { mode: 'influencer'|'anonymous', handsId?, gender?, skinDescription? }
+ * @param {string} input.productName
+ * @param {string} [input.productDescription]
+ * @param {string} [input.productPhotoBase64]
+ * @param {string} [input.productPhotoMimeType='image/jpeg']
+ * @returns {Promise<{prompts: Array<{takeNumber, purpose, klingPrompt}>, source}>}
+ */
+export async function generatePovKlingPrompts(input) {
+  const res = await fetch('/api/pov-kling-prompts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('pov-kling-prompts response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar prompts Kling POV (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;
 }
