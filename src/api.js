@@ -1,6 +1,9 @@
-// API helper functions for all backend calls (v4.5 — adds 3 POV helpers do Lote A)
+// API helper functions for all backend calls (v4.6 — adds 2 POV helpers do Lote B)
 //
 // CHANGELOG:
+// v4.6 — POV Sessão 2 Lote B (2 helpers fal.ai síncronos):
+//   - generatePovImageBase  → /api/pov-image-base       (Nano Banana Pro 1 imagem por take)
+//   - generatePovTTS        → /api/pov-elevenlabs-tts   (Eleven v3 1 áudio por take)
 // v4.5 — POV Sessão 2 Lote A (3 helpers Claude API):
 //   - recommendPovDefaults    → /api/pov-recommend       (sugere typeId/scenarioId/styleId/handsId)
 //   - generatePovScript       → /api/pov-script          (roteiro N takes + descrição/hashtags/CTA)
@@ -943,6 +946,80 @@ export async function generatePovKlingPrompts(input) {
   } catch {
     console.error('pov-kling-prompts response (not JSON):', res.status, text.substring(0, 500));
     throw new Error(`Erro ao gerar prompts Kling POV (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// v4.6 — POV Sessão 2 Lote B (2 helpers fal.ai síncronos)
+// Geração de imagem-base (Nano Banana Pro) e TTS (Eleven v3) por take.
+// Backend: api/pov-image-base.js, api/pov-elevenlabs-tts.js
+// ════════════════════════════════════════════════════════════════════════
+
+/**
+ * Gera UMA imagem-base pra UM take POV via Nano Banana Pro Edit.
+ * Atômico — frontend chama N vezes (1 por take) em paralelo via Promise.all.
+ *
+ * @param {Object} input
+ * @param {string} input.productPhotoUrl     — URL pública da foto do produto
+ * @param {string} [input.handsReferenceUrl] — URL pública da foto do influencer
+ *                                              (modo 'influencer'). Se omitido,
+ *                                              prompt descreve mãos genéricas.
+ * @param {string} input.prompt              — prompt já montado (em inglês)
+ * @param {number} [input.takeNumber]        — só pra log (1, 2, 3...)
+ * @returns {Promise<{imageUrl, prompt, seed, requestId, takeNumber}>}
+ */
+export async function generatePovImageBase(input) {
+  const res = await fetch('/api/pov-image-base', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('pov-image-base response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar imagem-base POV (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;
+}
+
+/**
+ * Gera UM áudio TTS (Eleven v3) pra UM take POV em modo 'voiced'.
+ * Atômico — frontend chama N vezes (1 por take com voiceText).
+ * O texto pode conter audio tags inline tipo "[excited]", "[whispers]".
+ *
+ * @param {Object} input
+ * @param {string} input.text             — texto PT-BR com audio tags opcionais
+ * @param {string} input.voiceId          — nome da voz (ex: "Sarah", "Brian")
+ * @param {number} [input.speed=1.0]      — 0.7 a 1.2
+ * @param {number} [input.stability=0.5]  — 0 a 1
+ * @param {number} [input.similarityBoost=0.75]
+ * @param {string} [input.languageCode='pt']
+ * @param {number} [input.takeNumber]
+ * @returns {Promise<{audioUrl, voiceId, charCount, requestId, takeNumber}>}
+ */
+export async function generatePovTTS(input) {
+  const res = await fetch('/api/pov-elevenlabs-tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('pov-elevenlabs-tts response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao gerar TTS POV (${res.status}).`);
   }
   if (data.error) {
     throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
