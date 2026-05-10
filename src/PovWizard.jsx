@@ -1,4 +1,13 @@
-// src/PovWizard.jsx (v1.2 — Sub-lote 3b.2 — wizard COMPLETO + onComplete)
+// src/PovWizard.jsx (v1.3 — Sub-lote 3c — suporta initialData pra editar config da galeria)
+//
+// CHANGELOG v1.3 (10/05/2026):
+//   ✅ Aceita prop `initialData` (objeto wizardData salvo na galeria).
+//   ✅ useEffect pré-preenche todos os states quando initialData muda.
+//   ✅ productPhoto NÃO é restaurado (base64 não fica salvo na galeria).
+//      Usuário precisa re-fazer upload da foto na edição.
+//
+// CHANGELOG v1.2 (10/05/2026):
+//   - Wizard completo + botão Step 10 chama onComplete(wizardData)
 //
 // Wizard principal da aba POV. Coleta todas as decisões do usuário pra gerar
 // um vídeo POV (Point of View) pra TikTok Shop.
@@ -62,7 +71,7 @@ const STEP_TITLES = [
 // Sub-lote 3b.1: steps 1-10 implementados, 11 fica placeholder
 const IMPLEMENTED_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-export default function PovWizard({ onComplete, onSwitchTab }) {
+export default function PovWizard({ onComplete, onSwitchTab, initialData = null }) {
   // ── Estado principal ──────────────────────────────────────────────────
   const [step, setStep] = useState(1);
 
@@ -114,6 +123,35 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
   useEffect(() => {
     setProfiles(getRealInfluencers());
   }, []);
+
+  // ── Pré-preenchimento via initialData (3c — "Editar config" da galeria) ──
+  // Quando vier wizardData salvo, popula todos os states com os valores antigos.
+  // NOTA: productPhoto NÃO é restaurado (base64 não fica salvo na galeria),
+  // o usuário precisa re-fazer upload na edição.
+  useEffect(() => {
+    if (!initialData) return;
+    if (initialData.influencerId) setSelectedProfileId(initialData.influencerId);
+    if (initialData.productName) setProductName(initialData.productName);
+    if (initialData.productDescription) setProductDescription(initialData.productDescription);
+    if (initialData.productPrice) setProductPrice(initialData.productPrice);
+    if (initialData.productOriginalPrice) setProductOriginalPrice(initialData.productOriginalPrice);
+    if (initialData.productCategoryId) setProductCategoryId(initialData.productCategoryId);
+    if (initialData.productViralTranscript) setProductViralTranscript(initialData.productViralTranscript);
+    if (initialData.typeId) setTypeId(initialData.typeId);
+    if (initialData.scenarioId) setScenarioId(initialData.scenarioId);
+    if (initialData.handsMode) setHandsMode(initialData.handsMode);
+    if (initialData.handsId) setHandsId(initialData.handsId);
+    if (initialData.styleId) setStyleId(initialData.styleId);
+    if (initialData.durationId) setDurationId(initialData.durationId);
+    if (initialData.audioMode) {
+      setAudioMode(initialData.audioMode);
+      // Se vier voiced, já marca acknowledged (usuário já passou por isso antes)
+      if (initialData.audioMode === 'voiced') setVoicedAcknowledged(true);
+    }
+    if (initialData.voiceId) setVoiceId(initialData.voiceId);
+    if (initialData.musicSuggestion) setMusicSuggestion(initialData.musicSuggestion);
+    console.log('[PovWizard] pré-preenchido com initialData');
+  }, [initialData]);
 
   // ── Aviso ao fechar com progresso ─────────────────────────────────────
   useEffect(() => {
