@@ -1,11 +1,15 @@
-// src/PovOutput.jsx (v1.0.1 — Sub-lote 3b.2.1 — HOTFIX modo voiced)
+// src/PovOutput.jsx (v1.0.2 — Sub-lote 3b.2.2 — FIX SYNC modo voiced)
 //
-// HOTFIX v1.0.1 (10/05/2026):
-//   ✅ Bug "silent mode only uses stage='start'" no modo voiced corrigido.
-//   ✅ A 3ª chamada do compose (merge-final) agora envia audioUrls também,
-//      pra backend detectar modo voiced corretamente.
-//   ✅ Sem esse fix, vídeo final sai SEM ÁUDIO mesmo em modo voiced
-//      (Kling + TTS rodavam, mas mesclagem final falhava com 400).
+// CHANGELOG v1.0.2 (10/05/2026):
+//   ✅ Modo voiced reescrito: 3 chamadas → 1 chamada via compose com timestamps.
+//   ✅ Sync perfeito por take (audio_i começa em i*10s do vídeo final).
+//   ✅ Sem mais -shortest cortando duração do vídeo final.
+//   ✅ 3× mais barato e 3× mais rápido (1 chamada compose vs 3 separadas).
+//   ✅ Backend pov-compose-final.js v1.1 espelha essa mudança.
+//
+// CHANGELOG v1.0.1 (10/05/2026):
+//   - Bug "silent mode only uses stage='start'" no voiced corrigido.
+//     (Substituído pelo fix maior do v1.0.2.)
 //
 // Componente que recebe wizardData consolidado (do PovWizard) e:
 //   1. Dispara a pipeline POV completa (7 helpers em sequência/paralelo)
@@ -318,29 +322,25 @@ export default function PovOutput({ wizardData, onStartNew }) {
         });
         finalUrl = result?.video?.url;
       } else {
-        // Modo voiced: 3 chamadas
+        // Modo voiced (v1.1): 1 chamada só via fal-ai/ffmpeg-api/compose
+        // com tracks + timestamps explícitos por take. Sync perfeito.
+        // (Antes era 3 chamadas: merge-videos → merge-audios → merge-audio-video,
+        //  que dessincronizava porque -shortest cortava vídeo pelo áudio.)
         const sortedAudios = [...audioResults].sort((a, b) => a.takeNumber - b.takeNumber);
         const audioUrls = sortedAudios.map((a) => a.audioUrl);
 
-        setStatusMessage('🔧 Concatenando vídeos (1/3)...');
-        const sub1 = await composePovFinal({ stage: 'start', videoUrls, audioUrls });
-        const r1 = await pollUntilComplete(sub1, { intervalMs: COMPOSE_POLL_INTERVAL_MS, maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS });
-        const mergedVideoUrl = r1?.video?.url;
-        if (!mergedVideoUrl) throw new Error('Compose stage 1 sem mergedVideoUrl');
-
-        setStatusMessage('🔧 Concatenando áudios (2/3)...');
-        const sub2 = await composePovFinal({ stage: 'merge-audios', videoUrls, audioUrls, mergedVideoUrl });
-        const r2 = await pollUntilComplete(sub2, { intervalMs: COMPOSE_POLL_INTERVAL_MS, maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS });
-        const mergedAudioUrl = r2?.audio?.url;
-        if (!mergedAudioUrl) throw new Error('Compose stage 2 sem mergedAudioUrl');
-
-        setStatusMessage('🔧 Mesclando vídeo + áudio (3/3)...');
-        // BUG FIX v1.0.1: passa audioUrls também na 3ª chamada pra backend
-        // detectar modo voiced (linha 106-114 do pov-compose-final.js).
-        // Sem audioUrls, backend interpreta como silent e rejeita stage='merge-final'.
-        const sub3 = await composePovFinal({ stage: 'merge-final', videoUrls, audioUrls, mergedVideoUrl, mergedAudioUrl });
-        const r3 = await pollUntilComplete(sub3, { intervalMs: COMPOSE_POLL_INTERVAL_MS, maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS });
-        finalUrl = r3?.video?.url;
+        setStatusMessage('🔧 Mesclando vídeo + áudio com timestamps sincronizados...');
+        const sub = await composePovFinal({
+          stage: 'start',
+          videoUrls,
+          audioUrls,
+          takeDurationSeconds: 10, // Kling 2.6 Pro: cada take = 10s
+        });
+        const result = await pollUntilComplete(sub, {
+          intervalMs: COMPOSE_POLL_INTERVAL_MS,
+          maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS,
+        });
+        finalUrl = result?.video_url || result?.video?.url;
       }
 
       if (!finalUrl) throw new Error('Composição não retornou URL final');
