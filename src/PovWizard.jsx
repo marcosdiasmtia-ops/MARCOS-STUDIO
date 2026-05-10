@@ -1,37 +1,43 @@
-// src/PovWizard.jsx (v1.0 — Sub-lote 3a — wizard 11 steps, steps 1-3 implementados)
+// src/PovWizard.jsx (v1.1 — Sub-lote 3b.1 — Steps 4-10 implementados)
 //
 // Wizard principal da aba POV. Coleta todas as decisões do usuário pra gerar
 // um vídeo POV (Point of View) pra TikTok Shop.
 //
-// SUB-LOTE 3a (atual):
-//   ✅ Step 1: Influencer (seleção do perfil cadastrado)
-//   ✅ Step 2: Produto (7 campos manuais)
-//   ✅ Step 3: Tipo de POV (11 opções em 4 grupos) + ✨ Claude sugere
-//   🚧 Steps 4-11: placeholder (vêm no Sub-lote 3b)
+// SUB-LOTE 3b.1 (atual):
+//   ✅ Step 1: Influencer
+//   ✅ Step 2: Produto (7 campos)
+//   ✅ Step 3: Tipo de POV (11 opções) + ✨ Claude sugere
+//   ✅ Step 4: Cenário (15 opções em 4 grupos)
+//   ✅ Step 5: Mãos (toggle Influencer ⟷ Anônima · 11 opções)
+//   ✅ Step 6: Estilo de câmera (8 opções em 2 categorias)
+//   ✅ Step 7: Duração (4 opções com custo dinâmico)
+//   ✅ Step 8: Áudio (Sem voz ⟷ Com voz · com warning experimental)
+//   ✅ Step 9: Voz/Roteiro (auto-selecionada se voiced; modo silent skipa visual)
+//   ✅ Step 10: Música (sugestão via callClaude — Comercial + Viral)
+//   🚧 Step 11: Placeholder (vem no Sub-lote 3b.2 com pipeline + resultado)
 //
-// SUB-LOTE 3b (próximo):
-//   - Step 4: Cenário (15 opções)
-//   - Step 5: Mãos (toggle Influencer ⟷ Anônima · 11 opções)
-//   - Step 6: Estilo de câmera (8 opções)
-//   - Step 7: Duração (20s/30s/40s/60s)
-//   - Step 8: Áudio (Sem voz ⟷ Com voz)
-//   - Step 9: Voz/Roteiro (só se Com voz)
-//   - Step 10: Música (sugestão Comercial + Viral)
-//   - Geração: dispara pipeline 7 helpers
-//
-// SUB-LOTE 3c (depois):
-//   - Step 11: Resultado (vídeo + pacote postagem) — vai pra PovOutput
-//
-// PADRÕES REUTILIZADOS (espelhando AvatarWizard.jsx):
-//   - step (number) state pra navegação
-//   - Stepper visual no topo
-//   - SelectableCard pra grids de opções (simplificado, sem preview lazy)
-//   - isStepValid(s) por step
-//   - Aviso ao fechar com progresso (beforeUnload)
+// SUB-LOTE 3b.2 (próximo):
+//   - Step 11: PovOutput recebe wizardData consolidado, dispara pipeline
+//     completa (7 helpers), faz polling visual, mostra vídeo final + pacote
 
 import { useState, useEffect, useMemo } from 'react';
-import { getRealInfluencers, recommendPovDefaults } from './api';
+import {
+  getRealInfluencers,
+  recommendPovDefaults,
+  callClaude,
+} from './api';
 import { POV_TYPES, POV_TYPE_GROUPS } from './data/pov-types';
+import { POV_SCENARIOS, POV_SCENARIO_GROUPS } from './data/pov-scenarios';
+import { POV_HANDS, POV_HANDS_MODES, HANDS_FEMALE, HANDS_MALE, HANDS_SPECIAL } from './data/pov-hands';
+import { POV_STYLES, POV_STYLE_CATEGORIES } from './data/pov-styles';
+import { POV_DURATIONS } from './data/pov-durations';
+import {
+  POV_ELEVENLABS_VOICES,
+  VOICES_FEMALE,
+  VOICES_MALE,
+  VOICE_BY_STYLE_FEMALE,
+  VOICE_BY_STYLE_MALE,
+} from './data/pov-elevenlabs-voices';
 import { UGC_CATEGORIES } from './data/ugc-categories';
 
 const TOTAL_STEPS = 11;
@@ -50,8 +56,8 @@ const STEP_TITLES = [
   'Resultado',           // 11
 ];
 
-// Sub-lote 3a: só steps 1-3 estão implementados
-const IMPLEMENTED_STEPS = [1, 2, 3];
+// Sub-lote 3b.1: steps 1-10 implementados, 11 fica placeholder
+const IMPLEMENTED_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 export default function PovWizard({ onComplete, onSwitchTab }) {
   // ── Estado principal ──────────────────────────────────────────────────
@@ -67,7 +73,7 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
   const [productPrice, setProductPrice] = useState('');
   const [productOriginalPrice, setProductOriginalPrice] = useState('');
   const [productCategoryId, setProductCategoryId] = useState('');
-  const [productPhoto, setProductPhoto] = useState(null); // { base64, mimeType, name, preview }
+  const [productPhoto, setProductPhoto] = useState(null);
   const [productViralTranscript, setProductViralTranscript] = useState('');
 
   // ── Step 3: Tipo de POV ───────────────────────────────────────────────
@@ -75,14 +81,31 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
   const [recommendingDefaults, setRecommendingDefaults] = useState(false);
   const [recommendError, setRecommendError] = useState(null);
 
-  // ── Step 4-10: futuros (Sub-lote 3b) — só guarda placeholders ────────
-  // Mantém os states aqui pra não quebrar quando 3b implementar
+  // ── Step 4: Cenário ───────────────────────────────────────────────────
   const [scenarioId, setScenarioId] = useState(null);
-  const [handsConfig, setHandsConfig] = useState({ mode: 'influencer' }); // mode: 'influencer' | 'anonymous'
+
+  // ── Step 5: Mãos ──────────────────────────────────────────────────────
+  // mode: 'influencer' (usa foto cadastrada) | 'anonymous' (escolhe da lista)
+  const [handsMode, setHandsMode] = useState('influencer');
+  const [handsId, setHandsId] = useState(null); // só usado se handsMode='anonymous'
+
+  // ── Step 6: Estilo de câmera ─────────────────────────────────────────
   const [styleId, setStyleId] = useState(null);
+
+  // ── Step 7: Duração ──────────────────────────────────────────────────
   const [durationId, setDurationId] = useState(null);
+
+  // ── Step 8: Áudio ────────────────────────────────────────────────────
   const [audioMode, setAudioMode] = useState('silent'); // 'silent' | 'voiced'
+  const [voicedAcknowledged, setVoicedAcknowledged] = useState(false);
+
+  // ── Step 9: Voz (só se voiced) ───────────────────────────────────────
   const [voiceId, setVoiceId] = useState(null);
+
+  // ── Step 10: Música ──────────────────────────────────────────────────
+  const [musicSuggestion, setMusicSuggestion] = useState(null);
+  const [musicLoading, setMusicLoading] = useState(false);
+  const [musicError, setMusicError] = useState(null);
 
   // ── Carrega influencers do localStorage ───────────────────────────────
   useEffect(() => {
@@ -106,25 +129,61 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
     [profiles, selectedProfileId]
   );
 
+  // Gênero da influencer (pra filtrar mãos e vozes)
+  const influencerGender = selectedProfile?.gender === 'male' ? 'male' : 'female';
+
+  // ── Auto-sugere voz quando entra no Step 9 (se ainda não escolhido) ──
+  useEffect(() => {
+    if (step === 9 && audioMode === 'voiced' && !voiceId && styleId) {
+      const map = influencerGender === 'male' ? VOICE_BY_STYLE_MALE : VOICE_BY_STYLE_FEMALE;
+      const suggested = map?.[styleId];
+      if (suggested) {
+        setVoiceId(suggested);
+      } else {
+        const firstVoice = influencerGender === 'male' ? VOICES_MALE[0] : VOICES_FEMALE[0];
+        if (firstVoice) setVoiceId(firstVoice.id);
+      }
+    }
+  }, [step, audioMode, voiceId, styleId, influencerGender]);
+
   // ── Validação por step ────────────────────────────────────────────────
   function isStepValid(s) {
     switch (s) {
       case 1: return !!selectedProfileId;
       case 2: return productName.trim().length >= 2 && productCategoryId && !!productPhoto;
       case 3: return !!typeId;
-      // Sub-lote 3b implementa 4-10
+      case 4: return !!scenarioId;
+      case 5: {
+        if (handsMode === 'influencer') return true;
+        if (handsMode === 'anonymous') return !!handsId;
+        return false;
+      }
+      case 6: return !!styleId;
+      case 7: return !!durationId;
+      case 8: {
+        if (audioMode === 'silent') return true;
+        if (audioMode === 'voiced') return voicedAcknowledged;
+        return false;
+      }
+      case 9: {
+        if (audioMode === 'silent') return true;
+        if (audioMode === 'voiced') return !!voiceId;
+        return false;
+      }
+      case 10: return true; // música é opcional
+      case 11: return false; // bloqueado até 3b.2
       default: return false;
     }
   }
 
   function canAdvance() {
-    if (!IMPLEMENTED_STEPS.includes(step)) return false; // bloqueia em placeholders
+    if (!IMPLEMENTED_STEPS.includes(step)) return false;
     return isStepValid(step);
   }
 
   // ── Navegação ─────────────────────────────────────────────────────────
   function handleBack() {
-    if (step === 1) return; // Sem cancelar — usuário troca de aba se quiser
+    if (step === 1) return;
     setStep((s) => s - 1);
   }
 
@@ -159,7 +218,7 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
     }
   }
 
-  // ── Step 3: ✨ Claude sugere (chama recommendPovDefaults) ─────────────
+  // ── Step 3: ✨ Claude sugere ──────────────────────────────────────────
   async function handleRecommendDefaults() {
     if (!productCategoryId || !productName) return;
 
@@ -172,18 +231,24 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
         productDescription: productDescription || undefined,
         productPhotoBase64: productPhoto?.base64,
         productPhotoMimeType: productPhoto?.mimeType,
-        influencerGender: selectedProfile?.gender || 'female',
-        handsMode: 'influencer', // default no 3a
+        influencerGender: influencerGender,
+        handsMode: handsMode,
       });
 
-      // Aplica todas as sugestões nos states (frontend valida que ID é válido)
       const rec = result.recommendations;
+      // Aplica apenas IDs válidos (defesa contra hallucination)
       if (rec.typeId && POV_TYPES.find((t) => t.id === rec.typeId)) {
         setTypeId(rec.typeId);
       }
-      // 3b vai aplicar scenarioId, styleId, handsId também
-      if (rec.scenarioId) setScenarioId(rec.scenarioId);
-      if (rec.styleId) setStyleId(rec.styleId);
+      if (rec.scenarioId && POV_SCENARIOS.find((s) => s.id === rec.scenarioId)) {
+        setScenarioId(rec.scenarioId);
+      }
+      if (rec.styleId && POV_STYLES.find((s) => s.id === rec.styleId)) {
+        setStyleId(rec.styleId);
+      }
+      if (rec.handsId && POV_HANDS.find((h) => h.id === rec.handsId)) {
+        setHandsId(rec.handsId);
+      }
 
       console.log('[PovWizard] Claude sugeriu:', rec, '· source:', result.source);
     } catch (err) {
@@ -191,6 +256,61 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
       setRecommendError(err.message || 'Erro ao chamar Claude');
     } finally {
       setRecommendingDefaults(false);
+    }
+  }
+
+  // ── Step 10: ✨ Sugerir música via callClaude ─────────────────────────
+  async function handleSuggestMusic() {
+    if (!productCategoryId || !typeId || !styleId) return;
+
+    setMusicLoading(true);
+    setMusicError(null);
+    try {
+      const productInfo = `Produto: ${productName}${productDescription ? ` — ${productDescription.substring(0, 200)}` : ''}`;
+      const styleName = POV_STYLES.find((s) => s.id === styleId)?.name || styleId;
+      const typeName = POV_TYPES.find((t) => t.id === typeId)?.name || typeId;
+      const categoryName = UGC_CATEGORIES.find((c) => c.id === productCategoryId)?.name || productCategoryId;
+
+      const systemPrompt = `Você é especialista em música pra vídeos UGC TikTok Shop em PT-BR.
+
+Sua missão: sugerir 2 músicas pra um vídeo POV (Point of View) baseado no contexto do produto e estilo. Uma sugestão Comercial (música livre/Pixabay/Epidemic Sound) e uma Viral (música real do TikTok atual).
+
+Contexto:
+- ${productInfo}
+- Categoria: ${categoryName}
+- Tipo de POV: ${typeName}
+- Estilo de câmera: ${styleName}
+
+Critérios:
+1. Comercial: descreva mood + gênero + BPM aproximado + termos de busca pra Marcos achar em bibliotecas livres (Pixabay, Epidemic Sound)
+2. Viral: sugira 1 música real que esteja em alta no TikTok BR em 2026 (artista + nome + breve justificativa de por que combina). Se não souber sobre tendências atuais, sugira algo evergreen do TikTok BR.
+
+RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
+{
+  "comercial": {
+    "mood": "string (ex: 'energético upbeat', 'dreamy chill')",
+    "genre": "string (ex: 'pop', 'lofi', 'electronic')",
+    "bpm": number,
+    "searchTerms": ["string", "string", "string"],
+    "rationale": "string em PT-BR, 1 frase"
+  },
+  "viral": {
+    "title": "string",
+    "artist": "string",
+    "rationale": "string em PT-BR, 1 frase"
+  }
+}`;
+
+      const userMessage = `Sugira 1 música Comercial e 1 Viral pra esse vídeo POV. Retorne APENAS o JSON.`;
+
+      const result = await callClaude(systemPrompt, userMessage);
+      setMusicSuggestion(result);
+      console.log('[PovWizard] Música sugerida:', result);
+    } catch (err) {
+      console.error('[PovWizard] sugerir música falhou:', err);
+      setMusicError(err.message || 'Erro ao chamar Claude');
+    } finally {
+      setMusicLoading(false);
     }
   }
 
@@ -274,7 +394,6 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
       <div className="card">
         <div className="card-title">Dados do produto</div>
 
-        {/* Linha 1: foto + nome */}
         <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
           <label className="upload-area-9-16" style={{ flexShrink: 0 }}>
             {productPhoto ? (
@@ -313,7 +432,6 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
           </div>
         </div>
 
-        {/* Descrição */}
         <div className="field">
           <label>Descrição técnica + diferenciais <span className="opt">(opcional)</span></label>
           <textarea
@@ -325,7 +443,6 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
           />
         </div>
 
-        {/* Preço + preço original */}
         <div className="grid-2">
           <div className="field">
             <label>Preço (R$) <span className="opt">(opcional)</span></label>
@@ -349,7 +466,6 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
           </div>
         </div>
 
-        {/* Transcrição viral */}
         <div className="field">
           <label>
             Transcrição viral <span className="opt">(opcional — vídeo viral pra inspirar)</span>
@@ -368,129 +484,555 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
 
   function renderStep3Type() {
     return (
-      <div>
-        <div className="card" style={{ marginBottom: 14 }}>
-          <div className="card-header-row">
-            <div className="card-title">Tipo de POV</div>
-            <button
-              className="copy-btn"
-              onClick={handleRecommendDefaults}
-              disabled={recommendingDefaults || !productCategoryId}
-              title={!productCategoryId ? 'Selecione categoria primeiro' : 'Claude sugere com base no produto'}
-              style={{
-                background: recommendingDefaults ? 'var(--gd)' : 'rgba(139,184,232,0.1)',
-                borderColor: 'rgba(139,184,232,0.25)',
-                color: 'var(--bl)',
-                fontWeight: 600,
-                padding: '5px 14px',
-              }}
-            >
-              {recommendingDefaults ? '⏳ Pensando...' : '✨ Claude sugere'}
-            </button>
-          </div>
-
-          {recommendError && (
-            <div className="error-box" style={{ marginBottom: 12 }}>
-              <p>⚠️ {recommendError}</p>
-            </div>
-          )}
-
-          <p className="hint" style={{ marginBottom: 16 }}>
-            Como a mão interage com o produto. Escolha o que combina com a forma física.
-          </p>
-
-          {/* Grupos */}
-          {POV_TYPE_GROUPS.map((group) => {
-            const typesOfGroup = POV_TYPES.filter((t) => t.group === group.id);
-            return (
-              <div key={group.id} style={{ marginBottom: 18 }}>
-                <div style={{
-                  fontSize: 11,
-                  color: 'var(--t2)',
-                  textTransform: 'uppercase',
-                  letterSpacing: 1,
-                  fontWeight: 700,
-                  marginBottom: 8,
-                }}>
-                  {group.emoji} {group.name}
-                </div>
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-                  gap: 8,
-                }}>
-                  {typesOfGroup.map((type) => {
-                    const isSelected = type.id === typeId;
-                    return (
-                      <div
-                        key={type.id}
-                        onClick={() => setTypeId(type.id)}
-                        style={{
-                          background: isSelected ? 'rgba(212,165,116,0.1)' : 'var(--cd)',
-                          border: isSelected ? '2px solid var(--g)' : '2px solid var(--bd)',
-                          borderRadius: 'var(--rs)',
-                          padding: 12,
-                          cursor: 'pointer',
-                          transition: 'all 0.2s',
-                          textAlign: 'center',
-                        }}
-                      >
-                        <div style={{ fontSize: 28, marginBottom: 6 }}>{type.emoji}</div>
-                        <div style={{
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: isSelected ? 'var(--g)' : 'var(--t)',
-                          marginBottom: 4,
-                        }}>
-                          {isSelected && '✓ '}{type.name}
-                        </div>
-                        <div style={{
-                          fontSize: 10,
-                          color: 'var(--t3)',
-                          lineHeight: 1.3,
-                        }}>
-                          {type.description}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Detalhes do tipo selecionado */}
-          {typeId && (
-            <div style={{
-              background: 'var(--blb)',
-              border: '1px solid rgba(139,184,232,0.2)',
-              borderRadius: 'var(--rs)',
-              padding: 12,
-              marginTop: 8,
-            }}>
-              <div style={{ fontSize: 11, color: 'var(--bl)', fontWeight: 600, marginBottom: 4 }}>
-                💡 Bom pra:
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--t)', lineHeight: 1.5 }}>
-                {POV_TYPES.find((t) => t.id === typeId)?.bestFor}
-              </div>
-            </div>
-          )}
+      <div className="card">
+        <div className="card-header-row">
+          <div className="card-title">Tipo de POV</div>
+          <button
+            className="copy-btn"
+            onClick={handleRecommendDefaults}
+            disabled={recommendingDefaults || !productCategoryId}
+            title={!productCategoryId ? 'Selecione categoria primeiro' : 'Claude sugere com base no produto'}
+            style={{
+              background: recommendingDefaults ? 'var(--gd)' : 'rgba(139,184,232,0.1)',
+              borderColor: 'rgba(139,184,232,0.25)',
+              color: 'var(--bl)',
+              fontWeight: 600,
+              padding: '5px 14px',
+            }}
+          >
+            {recommendingDefaults ? '⏳ Pensando...' : '✨ Claude sugere'}
+          </button>
         </div>
+
+        {recommendError && (
+          <div className="error-box" style={{ marginBottom: 12 }}>
+            <p>⚠️ {recommendError}</p>
+          </div>
+        )}
+
+        <p className="hint" style={{ marginBottom: 16 }}>
+          Como a mão interage com o produto. Escolha o que combina com a forma física.
+        </p>
+
+        {POV_TYPE_GROUPS.map((group) => {
+          const typesOfGroup = POV_TYPES.filter((t) => t.group === group.id);
+          return (
+            <GroupedGrid
+              key={group.id}
+              groupLabel={`${group.emoji} ${group.name}`}
+              items={typesOfGroup}
+              selectedId={typeId}
+              onSelect={setTypeId}
+            />
+          );
+        })}
+
+        {typeId && (
+          <InfoBox label="💡 Bom pra:" text={POV_TYPES.find((t) => t.id === typeId)?.bestFor} />
+        )}
       </div>
     );
   }
 
-  function renderPlaceholder(stepNumber) {
+  function renderStep4Scenario() {
+    return (
+      <div className="card">
+        <div className="card-title">Cenário do POV</div>
+        <p className="hint" style={{ marginBottom: 16 }}>
+          Onde o produto vai aparecer. Escolha o ambiente que combina com o vibe do produto.
+        </p>
+
+        {POV_SCENARIO_GROUPS.map((group) => {
+          const scenariosOfGroup = POV_SCENARIOS.filter((s) => s.group === group.id);
+          if (scenariosOfGroup.length === 0) return null;
+          return (
+            <GroupedGrid
+              key={group.id}
+              groupLabel={`${group.emoji} ${group.name}`}
+              items={scenariosOfGroup}
+              selectedId={scenarioId}
+              onSelect={setScenarioId}
+            />
+          );
+        })}
+
+        {scenarioId && (
+          <InfoBox
+            label="🎯 Cenário escolhido:"
+            text={POV_SCENARIOS.find((s) => s.id === scenarioId)?.description}
+          />
+        )}
+      </div>
+    );
+  }
+
+  function renderStep5Hands() {
+    // Filtra mãos disponíveis pelo gênero da influencer (modo anonymous)
+    const handsForGender = influencerGender === 'male'
+      ? [...HANDS_MALE, ...HANDS_SPECIAL]
+      : [...HANDS_FEMALE, ...HANDS_SPECIAL];
+
+    return (
+      <div className="card">
+        <div className="card-title">Mãos do POV</div>
+
+        <p className="hint" style={{ marginBottom: 12 }}>
+          De quem são as mãos que aparecem no vídeo?
+        </p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          {POV_HANDS_MODES.map((m) => {
+            const isActive = handsMode === m.id;
+            return (
+              <button
+                key={m.id}
+                onClick={() => {
+                  setHandsMode(m.id);
+                  if (m.id === 'influencer') setHandsId(null);
+                }}
+                style={{
+                  flex: 1,
+                  background: isActive ? 'var(--gd)' : 'var(--sf)',
+                  border: isActive ? '1px solid var(--g)' : '1px solid var(--bd)',
+                  color: isActive ? 'var(--g)' : 'var(--t)',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--rs)',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  textAlign: 'left',
+                  transition: 'all 0.2s',
+                }}
+              >
+                <div style={{ marginBottom: 4 }}>
+                  {isActive && '✓ '}{m.emoji} {m.name}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--t3)', fontWeight: 400 }}>
+                  {m.description}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Modo Influencer: mostra preview */}
+        {handsMode === 'influencer' && selectedProfile && (
+          <div style={{
+            background: 'rgba(107,189,138,0.08)',
+            border: '1px solid rgba(107,189,138,0.25)',
+            borderRadius: 'var(--rs)',
+            padding: 14,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+          }}>
+            <div className="profile-avatar" style={{ width: 50, height: 50 }}>
+              {selectedProfile.facePhotoUrl ? (
+                <img src={selectedProfile.facePhotoUrl} alt={selectedProfile.name} />
+              ) : (
+                <span>{influencerGender === 'male' ? '👨' : '👩'}</span>
+              )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, color: 'var(--gr)', fontWeight: 600 }}>
+                ✓ Mãos da {selectedProfile.name}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--t3)' }}>
+                Vai usar a foto cadastrada como referência. Consistência absoluta entre vídeos.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modo Anonymous: lista filtrada por gênero */}
+        {handsMode === 'anonymous' && (
+          <>
+            <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 }}>
+              Mãos disponíveis ({influencerGender === 'male' ? 'masculinas' : 'femininas'} + especiais)
+            </div>
+            <GroupedGrid
+              groupLabel=""
+              items={handsForGender}
+              selectedId={handsId}
+              onSelect={setHandsId}
+            />
+            {handsId && (
+              <InfoBox label="💡 Bom pra:" text={POV_HANDS.find((h) => h.id === handsId)?.bestFor} />
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function renderStep6Style() {
+    return (
+      <div className="card">
+        <div className="card-title">Estilo de câmera</div>
+        <p className="hint" style={{ marginBottom: 16 }}>
+          Como a câmera vai mostrar o produto. Escolha 1 abordagem visual.
+        </p>
+
+        {POV_STYLE_CATEGORIES.map((cat) => {
+          const stylesOfCat = POV_STYLES.filter((s) => s.category === cat.id);
+          if (stylesOfCat.length === 0) return null;
+          return (
+            <GroupedGrid
+              key={cat.id}
+              groupLabel={`${cat.emoji || '🎬'} ${cat.name}`}
+              items={stylesOfCat}
+              selectedId={styleId}
+              onSelect={setStyleId}
+            />
+          );
+        })}
+
+        {styleId && (
+          <InfoBox label="💡 Bom pra:" text={POV_STYLES.find((s) => s.id === styleId)?.bestFor} />
+        )}
+      </div>
+    );
+  }
+
+  function renderStep7Duration() {
+    return (
+      <div className="card">
+        <div className="card-title">Duração do vídeo</div>
+        <p className="hint" style={{ marginBottom: 16 }}>
+          Quanto tempo o vídeo deve durar. Cada take = 10s. Custo aumenta proporcionalmente
+          {audioMode === 'voiced' ? ' (modo com voz adiciona ~$0,06).' : '.'}
+        </p>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+          gap: 10,
+        }}>
+          {POV_DURATIONS.map((d) => {
+            const isSelected = d.id === durationId;
+            const cost = audioMode === 'voiced' ? d.estimatedCostVoiced : d.estimatedCostSilent;
+            return (
+              <div
+                key={d.id}
+                onClick={() => setDurationId(d.id)}
+                style={{
+                  background: isSelected ? 'rgba(212,165,116,0.1)' : 'var(--cd)',
+                  border: isSelected ? '2px solid var(--g)' : '2px solid var(--bd)',
+                  borderRadius: 'var(--rs)',
+                  padding: 14,
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  transition: 'all 0.2s',
+                }}
+              >
+                <div style={{
+                  fontSize: 22,
+                  fontWeight: 700,
+                  color: isSelected ? 'var(--g)' : 'var(--t)',
+                  marginBottom: 4,
+                }}>
+                  {isSelected && '✓ '}{d.label}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
+                  {d.composition}
+                </div>
+                <div style={{
+                  fontSize: 12,
+                  color: 'var(--bl)',
+                  background: 'var(--blb)',
+                  borderRadius: 4,
+                  padding: '3px 8px',
+                  display: 'inline-block',
+                  fontWeight: 600,
+                }}>
+                  ~${cost?.toFixed(2) || '?'}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {durationId && (
+          <InfoBox
+            label="📊 Detalhes:"
+            text={POV_DURATIONS.find((d) => d.id === durationId)?.description}
+          />
+        )}
+      </div>
+    );
+  }
+
+  function renderStep8Audio() {
+    return (
+      <div className="card">
+        <div className="card-title">Modo de áudio</div>
+        <p className="hint" style={{ marginBottom: 16 }}>
+          Vídeo silencioso (vibe POV TikTok puro) ou com narração off?
+        </p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+          {[
+            { id: 'silent', emoji: '🔇', name: 'Sem voz', description: 'Vídeo mudo. Você adiciona música no CapCut depois. Vibe TikTok puro.' },
+            { id: 'voiced', emoji: '🎙️', name: 'Com voz', description: 'Narração em PT-BR via ElevenLabs v3. Roteiro gerado pelo Claude.' },
+          ].map((m) => {
+            const isActive = audioMode === m.id;
+            return (
+              <div
+                key={m.id}
+                onClick={() => {
+                  setAudioMode(m.id);
+                  if (m.id === 'silent') setVoicedAcknowledged(false);
+                }}
+                style={{
+                  background: isActive ? 'rgba(212,165,116,0.1)' : 'var(--cd)',
+                  border: isActive ? '2px solid var(--g)' : '2px solid var(--bd)',
+                  borderRadius: 'var(--rs)',
+                  padding: 18,
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  transition: 'all 0.2s',
+                }}
+              >
+                <div style={{ fontSize: 36, marginBottom: 8 }}>{m.emoji}</div>
+                <div style={{
+                  fontSize: 15,
+                  fontWeight: 700,
+                  color: isActive ? 'var(--g)' : 'var(--t)',
+                  marginBottom: 6,
+                }}>
+                  {isActive && '✓ '}{m.name}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--t3)', lineHeight: 1.4 }}>
+                  {m.description}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Aviso de voiced experimental */}
+        {audioMode === 'voiced' && (
+          <div style={{
+            background: 'rgba(255,150,80,0.08)',
+            border: '1px solid rgba(255,150,80,0.3)',
+            borderRadius: 'var(--rs)',
+            padding: 14,
+          }}>
+            <div style={{ fontSize: 13, color: '#ffa75e', fontWeight: 700, marginBottom: 6 }}>
+              ⚠️ Modo Com voz — experimental v1.0
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--t2)', lineHeight: 1.5, marginBottom: 10 }}>
+              O áudio é gerado por take e depois concatenado. Como cada áudio dura ~5-8s mas
+              cada take dura 10s, pode haver pequena <strong>dessincronia entre fala e movimento</strong>.
+              Se incomodar, troca pra modo "Sem voz" e adiciona narração no CapCut depois.
+            </div>
+            <label style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              cursor: 'pointer',
+              fontSize: 12,
+              color: 'var(--t)',
+            }}>
+              <input
+                type="checkbox"
+                checked={voicedAcknowledged}
+                onChange={(e) => setVoicedAcknowledged(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              Entendi a limitação e quero usar modo Com voz mesmo assim
+            </label>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderStep9Voice() {
+    if (audioMode === 'silent') {
+      return (
+        <div className="card" style={{ textAlign: 'center', padding: '40px 24px' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔇</div>
+          <h3 style={{ color: 'var(--g)', fontSize: 16, marginBottom: 8 }}>
+            Modo silencioso ativo
+          </h3>
+          <p style={{ color: 'var(--t2)', fontSize: 13, lineHeight: 1.6 }}>
+            Como você escolheu modo "Sem voz", esta etapa não se aplica.
+            Avance pra próxima.
+          </p>
+        </div>
+      );
+    }
+
+    const voicesAvailable = influencerGender === 'male' ? VOICES_MALE : VOICES_FEMALE;
+
+    return (
+      <div className="card">
+        <div className="card-title">Voz pra narração (ElevenLabs v3)</div>
+        <p className="hint" style={{ marginBottom: 16 }}>
+          Voz que vai narrar o vídeo. Filtramos por gênero da influencer ({influencerGender === 'male' ? 'masculinas' : 'femininas'}).
+          {voiceId && (
+            <span style={{ color: 'var(--gr)', display: 'block', marginTop: 4 }}>
+              💡 Sugerimos <strong>{voiceId}</strong> baseado no estilo de câmera escolhido.
+            </span>
+          )}
+        </p>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          gap: 8,
+        }}>
+          {voicesAvailable.map((v) => {
+            const isSelected = v.id === voiceId;
+            return (
+              <div
+                key={v.id}
+                onClick={() => setVoiceId(v.id)}
+                style={{
+                  background: isSelected ? 'rgba(212,165,116,0.1)' : 'var(--cd)',
+                  border: isSelected ? '2px solid var(--g)' : '2px solid var(--bd)',
+                  borderRadius: 'var(--rs)',
+                  padding: 12,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                <div style={{
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: isSelected ? 'var(--g)' : 'var(--t)',
+                  marginBottom: 4,
+                }}>
+                  {isSelected && '✓ '}{v.id}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--t3)', lineHeight: 1.4 }}>
+                  {v.description}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="hint" style={{ marginTop: 16, fontSize: 11 }}>
+          🎙️ A voz aceita audio tags inline tipo <code style={{ color: 'var(--bl)' }}>[excited]</code>,{' '}
+          <code style={{ color: 'var(--bl)' }}>[whispers]</code> que serão geradas pelo Claude no roteiro.
+        </p>
+      </div>
+    );
+  }
+
+  function renderStep10Music() {
+    return (
+      <div className="card">
+        <div className="card-header-row">
+          <div className="card-title">Sugestão de música</div>
+          <button
+            className="copy-btn"
+            onClick={handleSuggestMusic}
+            disabled={musicLoading || !typeId || !styleId}
+            title={!typeId || !styleId ? 'Defina tipo e estilo primeiro' : 'Claude sugere música baseado no contexto'}
+            style={{
+              background: musicLoading ? 'var(--gd)' : 'rgba(139,184,232,0.1)',
+              borderColor: 'rgba(139,184,232,0.25)',
+              color: 'var(--bl)',
+              fontWeight: 600,
+              padding: '5px 14px',
+            }}
+          >
+            {musicLoading ? '⏳ Pensando...' : '✨ Sugerir música'}
+          </button>
+        </div>
+
+        {musicError && (
+          <div className="error-box" style={{ marginBottom: 12 }}>
+            <p>⚠️ {musicError}</p>
+          </div>
+        )}
+
+        <p className="hint" style={{ marginBottom: 16 }}>
+          Música é <strong>opcional</strong> e adicionada no CapCut depois.
+          Aqui o Claude sugere 2 opções: uma <strong>Comercial</strong> (livre de direitos) e uma <strong>Viral</strong> (música real do TikTok).
+        </p>
+
+        {!musicSuggestion && !musicLoading && (
+          <div style={{
+            background: 'var(--sf)',
+            border: '1px dashed var(--bd)',
+            borderRadius: 'var(--rs)',
+            padding: 24,
+            textAlign: 'center',
+            color: 'var(--t3)',
+            fontSize: 13,
+          }}>
+            🎵 Clique em "✨ Sugerir música" pra Claude analisar produto + estilo e gerar 2 sugestões.
+            <br />
+            Ou pule essa etapa — você pode escolher música no CapCut depois.
+          </div>
+        )}
+
+        {musicSuggestion && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {/* Comercial */}
+            <div style={{
+              background: 'var(--blb)',
+              border: '1px solid rgba(139,184,232,0.25)',
+              borderRadius: 'var(--rs)',
+              padding: 14,
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--bl)', fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+                🎵 Comercial (livre de direitos)
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--t)', marginBottom: 4 }}>
+                <strong>{musicSuggestion.comercial?.mood}</strong> · {musicSuggestion.comercial?.genre}
+                {' · '}{musicSuggestion.comercial?.bpm} BPM
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8 }}>
+                Buscar: {(musicSuggestion.comercial?.searchTerms || []).join(', ')}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--t2)', fontStyle: 'italic', lineHeight: 1.4 }}>
+                {musicSuggestion.comercial?.rationale}
+              </div>
+            </div>
+
+            {/* Viral */}
+            <div style={{
+              background: 'rgba(255,80,150,0.08)',
+              border: '1px solid rgba(255,80,150,0.25)',
+              borderRadius: 'var(--rs)',
+              padding: 14,
+            }}>
+              <div style={{ fontSize: 11, color: '#ff6b9d', fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+                🔥 Viral (TikTok atual)
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--t)', marginBottom: 4 }}>
+                <strong>{musicSuggestion.viral?.title}</strong>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8 }}>
+                {musicSuggestion.viral?.artist}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--t2)', fontStyle: 'italic', lineHeight: 1.4 }}>
+                {musicSuggestion.viral?.rationale}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderStep11Placeholder() {
     return (
       <div className="card" style={{ textAlign: 'center', padding: '40px 24px' }}>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>🚧</div>
+        <div style={{ fontSize: 56, marginBottom: 16 }}>🎬</div>
         <h3 style={{ color: 'var(--g)', fontSize: 17, marginBottom: 12 }}>
-          Step {stepNumber}: {STEP_TITLES[stepNumber - 1]}
+          Geração + Resultado
         </h3>
         <p style={{ color: 'var(--t2)', fontSize: 14, lineHeight: 1.6, maxWidth: 420, margin: '0 auto' }}>
-          Em construção — vem no <strong>Sub-lote 3b</strong>.<br />
-          Por enquanto, você pode navegar até aqui mas não avançar.
+          Em construção — vem no <strong>Sub-lote 3b.2</strong>.<br /><br />
+          Aqui ficará o botão <strong>"🎬 Gerar POV"</strong> que dispara a pipeline completa
+          (7 chamadas a fal.ai), polling visual com progresso por take, e a tela final
+          com vídeo + pacote de postagem (descrição, hashtags, CTAs).
         </p>
       </div>
     );
@@ -508,7 +1050,14 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
         {step === 1 && renderStep1Influencer()}
         {step === 2 && renderStep2Product()}
         {step === 3 && renderStep3Type()}
-        {step >= 4 && step <= 11 && renderPlaceholder(step)}
+        {step === 4 && renderStep4Scenario()}
+        {step === 5 && renderStep5Hands()}
+        {step === 6 && renderStep6Style()}
+        {step === 7 && renderStep7Duration()}
+        {step === 8 && renderStep8Audio()}
+        {step === 9 && renderStep9Voice()}
+        {step === 10 && renderStep10Music()}
+        {step === 11 && renderStep11Placeholder()}
       </div>
 
       <div className="actions-row">
@@ -525,7 +1074,7 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
           onClick={handleAdvance}
           disabled={!canAdvance()}
         >
-          {step === TOTAL_STEPS ? '🎬 Gerar POV' : 'Avançar →'}
+          {step === 10 ? '🎬 Pronto pra gerar →' : (step === TOTAL_STEPS ? '🎬 Gerar POV' : 'Avançar →')}
         </button>
       </div>
 
@@ -534,9 +1083,9 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
           Preencha os campos obrigatórios pra avançar.
         </p>
       )}
-      {!IMPLEMENTED_STEPS.includes(step) && (
+      {step === 11 && (
         <p className="hint" style={{ textAlign: 'center', marginTop: 12, fontSize: 12 }}>
-          Esta etapa está em construção. Volte ou aguarde a Sessão 3b.
+          Esta etapa está em construção. Volte ou aguarde a Sessão 3b.2.
         </p>
       )}
     </div>
@@ -544,7 +1093,7 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Componentes auxiliares (copiados do AvatarWizard.jsx — pattern do projeto)
+// Componentes auxiliares
 // ════════════════════════════════════════════════════════════════════════
 
 function Stepper({ currentStep, totalSteps, titles }) {
@@ -577,12 +1126,90 @@ function Stepper({ currentStep, totalSteps, titles }) {
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Helper de renderização das categorias agrupadas (Step 2)
-// ════════════════════════════════════════════════════════════════════════
+// Grid agrupado reutilizável
+function GroupedGrid({ groupLabel, items, selectedId, onSelect }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      {groupLabel && (
+        <div style={{
+          fontSize: 11,
+          color: 'var(--t2)',
+          textTransform: 'uppercase',
+          letterSpacing: 1,
+          fontWeight: 700,
+          marginBottom: 8,
+        }}>
+          {groupLabel}
+        </div>
+      )}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+        gap: 8,
+      }}>
+        {items.map((item) => {
+          const isSelected = item.id === selectedId;
+          return (
+            <div
+              key={item.id}
+              onClick={() => onSelect(item.id)}
+              style={{
+                background: isSelected ? 'rgba(212,165,116,0.1)' : 'var(--cd)',
+                border: isSelected ? '2px solid var(--g)' : '2px solid var(--bd)',
+                borderRadius: 'var(--rs)',
+                padding: 12,
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                textAlign: 'center',
+              }}
+            >
+              <div style={{ fontSize: 28, marginBottom: 6 }}>{item.emoji}</div>
+              <div style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: isSelected ? 'var(--g)' : 'var(--t)',
+                marginBottom: 4,
+              }}>
+                {isSelected && '✓ '}{item.name}
+              </div>
+              <div style={{
+                fontSize: 10,
+                color: 'var(--t3)',
+                lineHeight: 1.3,
+              }}>
+                {item.description}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
+// Box de info reutilizável (mostrado depois de seleção)
+function InfoBox({ label, text }) {
+  if (!text) return null;
+  return (
+    <div style={{
+      background: 'var(--blb)',
+      border: '1px solid rgba(139,184,232,0.2)',
+      borderRadius: 'var(--rs)',
+      padding: 12,
+      marginTop: 8,
+    }}>
+      <div style={{ fontSize: 11, color: 'var(--bl)', fontWeight: 600, marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--t)', lineHeight: 1.5 }}>
+        {text}
+      </div>
+    </div>
+  );
+}
+
+// Helper de renderização das categorias agrupadas (Step 2)
 function renderCategoryOptions() {
-  // Agrupa as 29 categorias TikTok Shop em 6 macro-grupos
   const groups = {
     beauty: 'Beleza & Cuidados',
     fashion: 'Moda Feminina',
