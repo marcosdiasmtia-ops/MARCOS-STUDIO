@@ -1,58 +1,53 @@
-// api/pov-compose-final.js (v1.0 — compose final POV via FFmpeg API do fal.ai)
+// api/pov-compose-final.js (v1.1 — compose final POV via FFmpeg API do fal.ai)
 //
-// Endpoint STATEFUL que orquestra a composição final do vídeo POV. Cada
-// chamada faz APENAS UM submit fal.ai e retorna 202 com requestId + nextStage.
-// O frontend orquestra: chama → polling no /api/video-status → chama com
-// próximo stage → repete até nextStage=null (vídeo final pronto).
+// CHANGELOG v1.1 (10/05/2026) — FIX MODO VOICED:
+//   - Modo voiced REESCRITO usando `fal-ai/ffmpeg-api/compose` com tracks +
+//     keyframes em timestamps explícitos por take. Substitui o pipeline
+//     antigo de 3 chamadas (merge-audios → merge-audio-video) que dessincronizava.
+//   - Modo voiced agora é 1 chamada só (stage='start' com audioUrls).
+//     Sem mais stages 'merge-audios' e 'merge-final'.
+//   - Vantagens:
+//     * Sync perfeito por take (audio_i começa no timestamp i*10s)
+//     * Vídeo final mantém 100% da duração original (sem -shortest cortando)
+//     * 3× mais barato (1 chamada compose vs 3 chamadas separadas)
+//     * 3× mais rápido (sem polling intermediário)
+//   - Modo silent continua usando merge-videos (1 chamada como antes).
+//   - Compat: frontend antigo que ainda manda stage='merge-audios' ou
+//     'merge-final' recebe erro 400 explicativo orientando a atualizar.
+//
+// ════════════════════════════════════════════════════════════════════════
+// Endpoint STATEFUL que orquestra a composição final do vídeo POV.
 //
 // MODOS DE USO:
 //
-// 🔇 MODO SILENT (default — POV puro mute):
-//   1 etapa apenas. Chama com stage='start' e modo silent.
-//   Pipeline: merge-videos → fim. Retorna URL do vídeo concatenado.
+// 🔇 MODO SILENT (POV puro mute):
+//   1 chamada apenas, stage='start' SEM audioUrls.
+//   Endpoint: fal-ai/ffmpeg-api/merge-videos
+//   Concat dos N vídeos do Kling em sequência. Vídeo final = soma das durações.
 //
 // 🎙️ MODO VOICED (com narração Eleven v3):
-//   3 etapas. Frontend orquestra:
-//   stage 'start' → merge-videos → frontend salva videoUrl
-//   stage 'merge-audios' → merge-audios → frontend salva audioUrl
-//   stage 'merge-final' → merge-audio-video → URL final
-//
-// FFMPEG API DO FAL.AI (descoberto em 10/05/2026 — game changer):
-//   - fal-ai/ffmpeg-api/merge-videos     — concat de N vídeos
-//   - fal-ai/ffmpeg-api/merge-audios     — concat de N áudios
-//   - fal-ai/ffmpeg-api/merge-audio-video — mergear áudio em vídeo
-//
-// Zero FFmpeg local no Vercel. Todo processamento na infra do fal.ai.
-//
-// ⚠️ LIMITAÇÃO CONHECIDA DO MODO VOICED v1.0:
-//   merge-audios concatena áudios EM SEQUÊNCIA, sem padding entre eles.
-//   Se take 1 dura 10s mas fala dura 6s, o áudio do take 2 começa aos 6s
-//   (não aos 10s). Resultado: dessincronia entre fala e movimento.
-//
-//   FIX FUTURO (v1.1): usar fal-ai/ffmpeg-api/compose com tracks que tem
-//   timestamps explícitos por take (audio[0] em 0s, audio[1] em 10s, etc).
-//   Por enquanto, modo voiced fica como "experimental — pode dessincronizar".
+//   1 chamada apenas, stage='start' COM audioUrls (mesmo número de videoUrls).
+//   Endpoint: fal-ai/ffmpeg-api/compose
+//   2 tracks:
+//     - Track video: cada vídeo com timestamp = i*10000ms, duration = 10000ms
+//     - Track audio: cada áudio com timestamp = i*10000ms, duration = 10000ms
+//       (Se áudio é < 10s, vídeo continua rodando com silêncio. Se áudio é
+//        ≥10s, fal.ai trunca pra duração do keyframe.)
 //
 // REQUEST:
 //   POST /api/pov-compose-final
 //   Body: {
-//     stage: 'start' | 'merge-audios' | 'merge-final',  // default 'start'
-//     videoUrls: string[],                               // sempre obrigatório (ordem dos takes)
-//     audioUrls?: string[],                              // só se modo voiced
-//     // Pra stage != 'start':
-//     mergedVideoUrl?: string,                           // resultado do stage 'start'
-//     mergedAudioUrl?: string,                           // resultado do stage 'merge-audios'
+//     stage?: 'start',         // só 'start' aceito na v1.1 (default)
+//     videoUrls: string[],     // sempre obrigatório, na ordem dos takes
+//     audioUrls?: string[],    // OPCIONAL. Se presente, ativa modo voiced.
+//                              // Tem que ter o mesmo comprimento de videoUrls.
+//     takeDurationSeconds?: number, // default 10 (Kling)
 //   }
 //
-// RESPONSE 202 (etapa intermediária ou final assíncrona):
+// RESPONSE 202:
 //   {
-//     requestId,
-//     endpoint,           // qual endpoint fal.ai foi usado
-//     statusUrl,          // pra polling no /api/video-status
-//     responseUrl,        // pra polling no /api/video-status
-//     stage,              // qual stage acabou de submeter
-//     nextStage,          // próximo a chamar OU null se for o último
-//     done: false,        // true só quando esta etapa é a última
+//     requestId, endpoint, statusUrl, responseUrl,
+//     stage: 'start', nextStage: null, done: true, mode: 'silent' | 'voiced'
 //   }
 //
 // RESPONSE 400 / 500: { error }
@@ -62,10 +57,12 @@
 // ════════════════════════════════════════════════════════════════════════
 
 const FFMPEG_MERGE_VIDEOS_ENDPOINT = 'fal-ai/ffmpeg-api/merge-videos';
-const FFMPEG_MERGE_AUDIOS_ENDPOINT = 'fal-ai/ffmpeg-api/merge-audios';
-const FFMPEG_MERGE_AV_ENDPOINT = 'fal-ai/ffmpeg-api/merge-audio-video';
+const FFMPEG_COMPOSE_ENDPOINT = 'fal-ai/ffmpeg-api/compose';
 
-const VALID_STAGES = ['start', 'merge-audios', 'merge-final'];
+// stages legadas (modo voiced antigo) — rejeitadas na v1.1
+const LEGACY_VOICED_STAGES = ['merge-audios', 'merge-final'];
+
+const VALID_STAGES = ['start'];
 
 // ════════════════════════════════════════════════════════════════════════
 // Handler
@@ -86,63 +83,57 @@ export default async function handler(req, res) {
       stage = 'start',
       videoUrls = [],
       audioUrls = [],
-      mergedVideoUrl = null,
-      mergedAudioUrl = null,
+      takeDurationSeconds = 10,
     } = req.body || {};
 
-    // ── Validação ────────────────────────────────────────────────────
-    if (!VALID_STAGES.includes(stage)) {
-      return res.status(400).json({ error: `stage must be one of: ${VALID_STAGES.join(', ')}` });
+    // ── Validação de stage ────────────────────────────────────────────
+    if (LEGACY_VOICED_STAGES.includes(stage)) {
+      return res.status(400).json({
+        error: `stage="${stage}" foi removido na v1.1. Modo voiced agora usa stage="start" com audioUrls — frontend (PovOutput.jsx) precisa estar atualizado.`,
+      });
     }
+    if (!VALID_STAGES.includes(stage)) {
+      return res.status(400).json({
+        error: `stage must be one of: ${VALID_STAGES.join(', ')} (received: "${stage}")`,
+      });
+    }
+
+    // ── Validação de vídeos ──────────────────────────────────────────
     if (!Array.isArray(videoUrls) || videoUrls.length === 0) {
       return res.status(400).json({ error: 'videoUrls is required (non-empty array)' });
     }
-    if (videoUrls.length === 1) {
-      // Só 1 vídeo, não precisa concat
-      console.warn('[pov-compose-final] Apenas 1 video — concat desnecessário');
-    }
 
-    // ── Determina o modo (silent vs voiced) baseado em audioUrls ─────
+    // ── Determina o modo (silent vs voiced) ───────────────────────────
     const hasAudio = Array.isArray(audioUrls) && audioUrls.length > 0;
     const mode = hasAudio ? 'voiced' : 'silent';
 
-    // ── Validação de stage por modo ──────────────────────────────────
-    if (mode === 'silent' && stage !== 'start') {
+    // ── Validação extra do modo voiced ────────────────────────────────
+    if (mode === 'voiced' && audioUrls.length !== videoUrls.length) {
       return res.status(400).json({
-        error: 'silent mode only uses stage="start" (single merge-videos call)',
+        error: `voiced mode requires audioUrls.length === videoUrls.length (got ${audioUrls.length} audios for ${videoUrls.length} videos)`,
       });
     }
-    if (stage === 'merge-audios' && !mergedVideoUrl) {
-      return res.status(400).json({
-        error: 'mergedVideoUrl is required for stage="merge-audios" (from previous stage="start" result)',
-      });
-    }
-    if (stage === 'merge-final' && (!mergedVideoUrl || !mergedAudioUrl)) {
-      return res.status(400).json({
-        error: 'mergedVideoUrl AND mergedAudioUrl are required for stage="merge-final"',
-      });
+    if (typeof takeDurationSeconds !== 'number' || takeDurationSeconds <= 0 || takeDurationSeconds > 60) {
+      return res.status(400).json({ error: 'takeDurationSeconds must be a number between 0 and 60' });
     }
 
-    // ── Roteia pro stage correto ─────────────────────────────────────
+    // ── Roteia pro endpoint correto ───────────────────────────────────
     let result;
-    switch (stage) {
-      case 'start':
-        result = await stageStart(videoUrls, mode, FAL_KEY);
-        break;
-      case 'merge-audios':
-        result = await stageMergeAudios(audioUrls, FAL_KEY);
-        break;
-      case 'merge-final':
-        result = await stageMergeFinal(mergedVideoUrl, mergedAudioUrl, FAL_KEY);
-        break;
+    if (mode === 'silent') {
+      result = await composeSilent(videoUrls, FAL_KEY);
+    } else {
+      result = await composeVoiced(videoUrls, audioUrls, takeDurationSeconds, FAL_KEY);
     }
 
     if (result.error) {
-      return res.status(result.statusCode || 500).json({ error: result.error, details: result.details });
+      return res.status(result.statusCode || 500).json({
+        error: result.error,
+        details: result.details,
+      });
     }
 
     console.log(
-      `[pov-compose-final] OK: stage=${stage}, mode=${mode}, requestId=${result.requestId}, nextStage=${result.nextStage || 'null (done)'}`
+      `[pov-compose-final v1.1] OK: mode=${mode}, requestId=${result.requestId}, endpoint=${result.endpoint}`
     );
 
     return res.status(202).json({
@@ -150,25 +141,24 @@ export default async function handler(req, res) {
       endpoint: result.endpoint,
       statusUrl: result.statusUrl,
       responseUrl: result.responseUrl,
-      stage: stage,
-      nextStage: result.nextStage,
-      done: result.nextStage === null,
+      stage: 'start',
+      nextStage: null, // sempre null na v1.1 (1 chamada só)
+      done: true,
       mode: mode,
     });
   } catch (error) {
-    console.error('[pov-compose-final] Error:', error);
+    console.error('[pov-compose-final v1.1] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Stage 'start' — concat dos vídeos do Kling
-// Sempre roda. Em modo silent, é o único stage. Em modo voiced, vira
-// input do stage 'merge-final' depois.
+// Modo SILENT — concat dos vídeos do Kling via merge-videos
+// (mesmo comportamento da v1.0, mantido por simplicidade e custo menor)
 // ════════════════════════════════════════════════════════════════════════
 
-async function stageStart(videoUrls, mode, FAL_KEY) {
-  console.log(`[pov-compose-final stage=start] Merging ${videoUrls.length} videos (mode=${mode})`);
+async function composeSilent(videoUrls, FAL_KEY) {
+  console.log(`[pov-compose-final silent] Merging ${videoUrls.length} videos`);
 
   const submitData = await submitFalQueue(
     FFMPEG_MERGE_VIDEOS_ENDPOINT,
@@ -183,50 +173,61 @@ async function stageStart(videoUrls, mode, FAL_KEY) {
     endpoint: FFMPEG_MERGE_VIDEOS_ENDPOINT,
     statusUrl: submitData.status_url,
     responseUrl: submitData.response_url,
-    nextStage: mode === 'voiced' ? 'merge-audios' : null,
   };
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Stage 'merge-audios' — concat dos áudios do Eleven v3 (modo voiced)
+// Modo VOICED — fal-ai/ffmpeg-api/compose com tracks + timestamps
 //
-// ⚠️ LIMITAÇÃO v1.0: concatena em sequência sem padding. Se cada áudio
-// dura 5-8s mas cada take dura 10s, áudios "comem" o silêncio entre takes.
+// Schema do compose:
+//   tracks: [
+//     {
+//       id: string,
+//       type: 'video' | 'audio',
+//       keyframes: [{ url, timestamp (ms), duration (ms) }]
+//     }
+//   ]
+//
+// Estratégia: cada take ocupa um slot de takeDurationSeconds (10s default).
+// Vídeo do take i: timestamp = i * 10000ms, duration = 10000ms
+// Áudio do take i: timestamp = i * 10000ms, duration = 10000ms
+//   (Se áudio é < 10s, fal.ai pad com silêncio. Se ≥ 10s, trunca.)
+//
+// Resultado: vídeo final tem N * 10s de duração, áudio sincronizado por take.
 // ════════════════════════════════════════════════════════════════════════
 
-async function stageMergeAudios(audioUrls, FAL_KEY) {
-  console.log(`[pov-compose-final stage=merge-audios] Merging ${audioUrls.length} audios`);
+async function composeVoiced(videoUrls, audioUrls, takeDurationSeconds, FAL_KEY) {
+  const durationMs = takeDurationSeconds * 1000;
+  console.log(`[pov-compose-final voiced] Composing ${videoUrls.length} takes (${takeDurationSeconds}s each)`);
 
-  const submitData = await submitFalQueue(
-    FFMPEG_MERGE_AUDIOS_ENDPOINT,
-    { audio_urls: audioUrls },
-    FAL_KEY
-  );
+  const videoKeyframes = videoUrls.map((url, i) => ({
+    url,
+    timestamp: i * durationMs,
+    duration: durationMs,
+  }));
 
-  if (submitData.error) return submitData;
+  const audioKeyframes = audioUrls.map((url, i) => ({
+    url,
+    timestamp: i * durationMs,
+    duration: durationMs,
+  }));
 
-  return {
-    requestId: submitData.request_id,
-    endpoint: FFMPEG_MERGE_AUDIOS_ENDPOINT,
-    statusUrl: submitData.status_url,
-    responseUrl: submitData.response_url,
-    nextStage: 'merge-final',
-  };
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// Stage 'merge-final' — mergeia o áudio concatenado no vídeo concatenado
-// ════════════════════════════════════════════════════════════════════════
-
-async function stageMergeFinal(videoUrl, audioUrl, FAL_KEY) {
-  console.log(`[pov-compose-final stage=merge-final] Merging audio+video`);
-
-  const submitData = await submitFalQueue(
-    FFMPEG_MERGE_AV_ENDPOINT,
+  const tracks = [
     {
-      video_url: videoUrl,
-      audio_url: audioUrl,
+      id: 'video_track',
+      type: 'video',
+      keyframes: videoKeyframes,
     },
+    {
+      id: 'audio_track',
+      type: 'audio',
+      keyframes: audioKeyframes,
+    },
+  ];
+
+  const submitData = await submitFalQueue(
+    FFMPEG_COMPOSE_ENDPOINT,
+    { tracks },
     FAL_KEY
   );
 
@@ -234,10 +235,9 @@ async function stageMergeFinal(videoUrl, audioUrl, FAL_KEY) {
 
   return {
     requestId: submitData.request_id,
-    endpoint: FFMPEG_MERGE_AV_ENDPOINT,
+    endpoint: FFMPEG_COMPOSE_ENDPOINT,
     statusUrl: submitData.status_url,
     responseUrl: submitData.response_url,
-    nextStage: null, // último stage
   };
 }
 
@@ -257,23 +257,22 @@ async function submitFalQueue(endpoint, body, FAL_KEY) {
 
   if (!submitRes.ok) {
     const errText = await submitRes.text();
-    console.error(`[pov-compose-final] fal.ai submit error ${submitRes.status} (${endpoint}):`, errText.substring(0, 300));
+    console.error(`[pov-compose-final v1.1] fal.ai submit error ${submitRes.status} (${endpoint}):`, errText.substring(0, 500));
     return {
-      error: `fal.ai error: ${submitRes.status}`,
+      error: `fal.ai retornou ${submitRes.status} ao submeter ${endpoint}`,
       details: errText.substring(0, 300),
-      statusCode: submitRes.status,
+      statusCode: 502,
     };
   }
 
   const data = await submitRes.json();
-
   if (!data.request_id) {
-    return { error: 'No request_id from fal.ai', details: JSON.stringify(data).substring(0, 300), statusCode: 500 };
+    return {
+      error: 'fal.ai não retornou request_id',
+      details: JSON.stringify(data).substring(0, 300),
+      statusCode: 502,
+    };
   }
 
-  return {
-    request_id: data.request_id,
-    status_url: data.status_url || `https://queue.fal.run/${endpoint}/requests/${data.request_id}/status`,
-    response_url: data.response_url || `https://queue.fal.run/${endpoint}/requests/${data.request_id}`,
-  };
+  return data;
 }
