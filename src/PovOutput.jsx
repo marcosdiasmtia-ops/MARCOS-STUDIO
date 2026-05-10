@@ -1,4 +1,9 @@
-// src/PovOutput.jsx (v1.0.2 — Sub-lote 3b.2.2 — FIX SYNC modo voiced)
+// src/PovOutput.jsx (v1.0.3 — Sub-lote 3c — salva URLs pra variação + reuso)
+//
+// CHANGELOG v1.0.3 (10/05/2026):
+//   ✅ Salva productPhotoUrl e handsReferenceUrl no entry da galeria.
+//   ✅ Aceita wizardData.productPhotoUrl pra pular re-upload (variação direta).
+//   ✅ Validação melhor: se nem URL nem base64, dá erro claro pra usuário.
 //
 // CHANGELOG v1.0.2 (10/05/2026):
 //   ✅ Modo voiced reescrito: 3 chamadas → 1 chamada via compose com timestamps.
@@ -193,15 +198,27 @@ export default function PovOutput({ wizardData, onStartNew }) {
       setStageStatus('prompts', 'done');
 
       // ── ETAPA 3: Upload pra fal.ai ───────────────────────────────────
-      setStatusMessage('📤 Enviando produto pra fal.ai...');
+      // 3c: se já vier URL no wizardData (variação da galeria), reusa.
+      // Senão faz upload do base64 normalmente.
       setStageStatus('upload', 'in-progress');
-      const productPhotoUrl = await uploadToFal(
-        wizardData.productPhotoBase64,
-        wizardData.productPhotoMimeType,
-        'pov-product.png'
-      );
-      let handsReferenceUrl = null;
-      if (wizardData.handsMode === 'influencer' && wizardData.influencerFaceBase64) {
+      let productPhotoUrl = wizardData.productPhotoUrl || null;
+      let handsReferenceUrl = wizardData.handsReferenceUrl || null;
+
+      if (!productPhotoUrl) {
+        setStatusMessage('📤 Enviando produto pra fal.ai...');
+        if (!wizardData.productPhotoBase64) {
+          throw new Error('Sem foto do produto: nem URL nem base64 fornecidos. Volte ao wizard e faça upload.');
+        }
+        productPhotoUrl = await uploadToFal(
+          wizardData.productPhotoBase64,
+          wizardData.productPhotoMimeType,
+          'pov-product.png'
+        );
+      } else {
+        setStatusMessage('♻️ Reusando produto da galeria...');
+      }
+
+      if (!handsReferenceUrl && wizardData.handsMode === 'influencer' && wizardData.influencerFaceBase64) {
         handsReferenceUrl = await uploadToFal(
           wizardData.influencerFaceBase64,
           wizardData.influencerFaceMimeType || 'image/jpeg',
@@ -360,11 +377,18 @@ export default function PovOutput({ wizardData, onStartNew }) {
       setStatusMessage('✨ Vídeo POV pronto!');
 
       // Persiste em localStorage pra galeria do 3c
+      // IMPORTANTE: inclui productPhotoUrl e handsReferenceUrl pra permitir
+      // "🔁 Gerar variação" sem precisar de re-upload da foto.
+      const wizardDataForGallery = {
+        ...pickSerializable(wizardData),
+        productPhotoUrl,
+        handsReferenceUrl: handsReferenceUrl || null,
+      };
       savePovToGallery({
         id: `pov_${Date.now()}`,
         createdAt: new Date().toISOString(),
         finalVideoUrl: finalUrl,
-        wizardData: pickSerializable(wizardData),
+        wizardData: wizardDataForGallery,
         packageData: pkg,
         takesData: sortedVideos,
       });
