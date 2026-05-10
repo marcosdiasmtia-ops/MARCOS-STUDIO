@@ -1,4 +1,10 @@
-// api/pov-script.js (v1.0 — Claude Sonnet 4 gera roteiro POV de N takes)
+// api/pov-script.js (v1.1 — Claude Sonnet 4 gera roteiro POV de N takes)
+//
+// CHANGELOG v1.1 (10/05/2026):
+//   - Fix dimensionamento do voiceText: 8-15 palavras → 25-30 palavras (~8-10s).
+//     Sem esse fix, áudio sempre saía muito mais curto que vídeo (cada take dura 10s).
+//     Combinado com fix do pov-compose-final.js v1.1 (compose com timestamps),
+//     vídeo final agora tem sync perfeito sem cortar duração.
 //
 // Endpoint que gera o ROTEIRO COMPLETO pro vídeo POV — Claude analisa
 // (produto, tipo, cenário, estilo, duração, modo de áudio) e devolve:
@@ -168,7 +174,9 @@ export default async function handler(req, res) {
 - TOTAL de frases on-screen: ${config.hookCount + config.demoMin + config.ctaCount} a ${config.hookCount + config.demoMax + config.ctaCount}`
       : `MODO DE ÁUDIO: VOICED (narração off com voz "${voiceId}" do Eleven v3)
 - voiceText DEVE estar PREENCHIDO em TODOS os ${totalTakes} takes
-- Cada voiceText: 1 frase curta (8-15 palavras), em PT-BR coloquial
+- Cada voiceText: ~25-30 palavras (≈8-10s de fala natural em PT-BR coloquial pra preencher o take de 10s)
+  IMPORTANTE: cada take dura 10 segundos. Texto muito curto deixa silêncio sobrando.
+  Tom: pessoal, autêntico, vibe TikTok (não comercial robótico).
 - USE 1-2 audio tags por voiceText pra dar emoção (ex: "[excited] Gente, olha isso!", "[whispers] sério, viu...")
 - onScreenPhrases COMPLEMENTAM o áudio (não duplicam):
   * Hook: 1 frase no take 1 (gancho visual curto)
