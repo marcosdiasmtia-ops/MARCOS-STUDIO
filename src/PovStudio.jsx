@@ -1,34 +1,36 @@
-// src/PovStudio.jsx (v1.1 — Sub-lote 3b.2 — output mode funcional)
+// src/PovStudio.jsx (v1.2 — Sub-lote 3c — galeria + variação + edição)
 //
 // Container principal da aba POV. Roteia entre 3 modos:
-//   - 'wizard'   → PovWizard (formulário de 11 passos pra gerar vídeo)
-//   - 'output'   → PovOutput (pipeline + tela final com vídeo + pacote) ✅ NOVO 3b.2
-//   - 'gallery'  → PovGallery (POVs gerados anteriormente) [3c]
+//   - 'wizard'   → PovWizard (formulário de 11 passos)
+//   - 'output'   → PovOutput (pipeline + tela final)
+//   - 'gallery'  → PovGallery (POVs gerados anteriormente) ✅ NOVO 3c
 //
-// SUB-LOTE 3b.2 atual:
-//   ✅ Wizard completa (steps 1-10)
-//   ✅ Output funcional (pipeline + resultado)
-//   🚧 Galeria fica pro 3c
+// Fluxos novos do 3c:
+//   1. "🖼 Galeria" → mode='gallery' (lista POVs salvos)
+//   2. "🔁 Variar" na galeria → mode='output' direto com wizardData salvo
+//      (pula wizard inteiro, dispara pipeline com mesma config)
+//   3. "✏️ Editar" na galeria → mode='wizard' com initialData pré-preenchido
+//   4. PovOutput salva URL pública do produto pra permitir variação direta
 //
 // PROPS:
-//   - onSwitchTab(tabName) — callback pra outras abas (ex: redirecionar pra
-//                            'influencers' se zero influencers cadastradas)
+//   - onSwitchTab(tabName) — callback pra outras abas
 
 import { useState } from 'react';
 import PovWizard from './PovWizard';
 import PovOutput from './PovOutput';
-
-const POV_GALLERY_KEY = 'marcos-studio-pov-gallery';
+import PovGallery from './PovGallery';
 
 export default function PovStudio({ onSwitchTab }) {
   // 'wizard' | 'output' | 'gallery'
   const [mode, setMode] = useState('wizard');
 
-  // wizardData consolidado quando o usuário clica "🎬 Gerar POV" no Step 10
-  // → vira input do PovOutput pra disparar a pipeline
+  // wizardData consolidado: vira input do PovOutput
   const [wizardData, setWizardData] = useState(null);
 
-  // Wizard completo → consolida dados → vai pro modo output
+  // initialData: pré-preenche o wizard quando vem de "Editar config"
+  const [wizardInitialData, setWizardInitialData] = useState(null);
+
+  // ── Handlers do wizard ────────────────────────────────────────────────
   function handleWizardComplete(data) {
     setWizardData(data);
     setMode('output');
@@ -36,11 +38,26 @@ export default function PovStudio({ onSwitchTab }) {
 
   function handleStartNew() {
     setWizardData(null);
+    setWizardInitialData(null);
     setMode('wizard');
   }
 
+  // ── Handlers da galeria ───────────────────────────────────────────────
   function handleOpenGallery() {
     setMode('gallery');
+  }
+
+  function handleVariation(savedWizardData) {
+    // Variação: dispara pipeline direto com config salva
+    setWizardData(savedWizardData);
+    setMode('output');
+  }
+
+  function handleEditConfig(savedWizardData) {
+    // Edição: volta pro wizard pré-preenchido
+    setWizardInitialData(savedWizardData);
+    setWizardData(null);
+    setMode('wizard');
   }
 
   // ── Renderização ─────────────────────────────────────────────────────
@@ -81,22 +98,19 @@ export default function PovStudio({ onSwitchTab }) {
         </button>
         <button
           onClick={handleOpenGallery}
-          disabled
-          title="Disponível na Sessão 3c"
           style={{
-            background: 'transparent',
-            border: '1px solid var(--bd)',
-            color: 'var(--t3)',
+            background: mode === 'gallery' ? 'var(--gd)' : 'transparent',
+            border: mode === 'gallery' ? '1px solid var(--gb)' : '1px solid var(--bd)',
+            color: mode === 'gallery' ? 'var(--g)' : 'var(--t2)',
             padding: '6px 14px',
             borderRadius: 16,
             fontSize: 12,
             fontWeight: 600,
-            cursor: 'not-allowed',
+            cursor: 'pointer',
             fontFamily: 'inherit',
-            opacity: 0.5,
           }}
         >
-          🖼 Galeria (em breve)
+          🖼 Galeria
         </button>
       </div>
 
@@ -105,6 +119,7 @@ export default function PovStudio({ onSwitchTab }) {
         <PovWizard
           onComplete={handleWizardComplete}
           onSwitchTab={onSwitchTab}
+          initialData={wizardInitialData}
         />
       )}
 
@@ -116,45 +131,12 @@ export default function PovStudio({ onSwitchTab }) {
       )}
 
       {mode === 'gallery' && (
-        <PlaceholderCard
-          icon="🖼"
-          title="Galeria de POVs"
-          message="Aqui ficarão todos os POVs gerados anteriormente, com filtros por influencer/categoria/duração. Disponível na Sessão 3c."
-          onBack={handleStartNew}
+        <PovGallery
+          onStartVariation={handleVariation}
+          onEditConfig={handleEditConfig}
+          onClose={handleStartNew}
         />
       )}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// Placeholder reutilizável pros modos não implementados (output / gallery)
-// ════════════════════════════════════════════════════════════════════════
-
-function PlaceholderCard({ icon, title, message, onBack }) {
-  return (
-    <div className="card" style={{ textAlign: 'center', padding: '40px 24px' }}>
-      <div style={{ fontSize: 64, marginBottom: 16 }}>{icon}</div>
-      <h2 style={{
-        fontSize: 18,
-        color: 'var(--g)',
-        marginBottom: 12,
-        fontWeight: 700,
-      }}>
-        {title}
-      </h2>
-      <p style={{
-        color: 'var(--t2)',
-        fontSize: 14,
-        lineHeight: 1.6,
-        maxWidth: 400,
-        margin: '0 auto 24px',
-      }}>
-        {message}
-      </p>
-      <button onClick={onBack} className="back-btn">
-        ← Voltar pro wizard
-      </button>
     </div>
   );
 }
