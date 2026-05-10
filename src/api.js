@@ -1,6 +1,10 @@
-// API helper functions for all backend calls (v4.6 — adds 2 POV helpers do Lote B)
+// API helper functions for all backend calls (v4.7 — adds 2 POV helpers do Lote C)
 //
 // CHANGELOG:
+// v4.7 — POV Sessão 2 Lote C (2 helpers fal.ai async — fecha pipeline POV):
+//   - submitPovKlingVideo  → /api/pov-kling-generate   (Kling 2.6 Pro 1 take, async)
+//   - composePovFinal      → /api/pov-compose-final    (FFmpeg API stateful, 1-3 stages)
+//   * Polling reusa /api/video-status (já existe via checkVideoStatus)
 // v4.6 — POV Sessão 2 Lote B (2 helpers fal.ai síncronos):
 //   - generatePovImageBase  → /api/pov-image-base       (Nano Banana Pro 1 imagem por take)
 //   - generatePovTTS        → /api/pov-elevenlabs-tts   (Eleven v3 1 áudio por take)
@@ -1020,6 +1024,111 @@ export async function generatePovTTS(input) {
   } catch {
     console.error('pov-elevenlabs-tts response (not JSON):', res.status, text.substring(0, 500));
     throw new Error(`Erro ao gerar TTS POV (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// v4.7 — POV Sessão 2 Lote C (2 helpers fal.ai async — fecha pipeline POV)
+// Geração de vídeo Kling 2.6 Pro e composição final via FFmpeg API.
+// Backend: api/pov-kling-generate.js, api/pov-compose-final.js
+// Polling: reusa checkVideoStatus (já existente, /api/video-status)
+// ════════════════════════════════════════════════════════════════════════
+
+/**
+ * Submete UM vídeo Kling 2.6 Pro pra UM take POV. NÃO aguarda conclusão.
+ * Retorna 202 com requestId/URLs pro frontend fazer polling via
+ * checkVideoStatus(requestId, endpoint, statusUrl, responseUrl).
+ *
+ * Atômico — frontend chama N vezes (1 por take) em paralelo via Promise.all
+ * e depois faz polling em loop pra cada um.
+ *
+ * @param {Object} input
+ * @param {string} input.prompt              — prompt em inglês (do generatePovKlingPrompts)
+ * @param {string} input.startImageUrl       — URL da imagem-base (do generatePovImageBase)
+ * @param {'5'|'10'} [input.duration='10']
+ * @param {boolean} [input.generateAudio=false]  — sempre false pra POV (áudio vem do TTS)
+ * @param {number} [input.takeNumber]
+ * @returns {Promise<{requestId, endpoint, statusUrl, responseUrl, takeNumber?}>}
+ *
+ * @example
+ *   const submission = await submitPovKlingVideo({ prompt, startImageUrl, takeNumber: 1 });
+ *   // Polling no frontend:
+ *   while (true) {
+ *     const status = await checkVideoStatus(
+ *       submission.requestId, submission.endpoint,
+ *       submission.statusUrl, submission.responseUrl
+ *     );
+ *     if (status.status === 'COMPLETED') {
+ *       const videoUrl = status.result.video.url;
+ *       break;
+ *     }
+ *     await new Promise(r => setTimeout(r, 5000));
+ *   }
+ */
+export async function submitPovKlingVideo(input) {
+  const res = await fetch('/api/pov-kling-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('pov-kling-generate response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao submeter vídeo Kling POV (${res.status}).`);
+  }
+  if (data.error) {
+    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+  }
+  return data;
+}
+
+/**
+ * Submete UMA etapa da composição final POV via FFmpeg API do fal.ai.
+ * Endpoint stateful — chamado 1× (modo silent) ou 3× (modo voiced) com
+ * stage diferente em cada chamada.
+ *
+ * MODO SILENT — 1 chamada:
+ *   composePovFinal({ stage: 'start', videoUrls })
+ *   → polling video-status → resultado.video.url = vídeo final ✅
+ *
+ * MODO VOICED — 3 chamadas:
+ *   1. composePovFinal({ stage: 'start', videoUrls, audioUrls })
+ *      → polling → resultado.video.url = mergedVideoUrl
+ *   2. composePovFinal({ stage: 'merge-audios', videoUrls, audioUrls, mergedVideoUrl })
+ *      → polling → resultado.audio.url = mergedAudioUrl
+ *   3. composePovFinal({ stage: 'merge-final', videoUrls, mergedVideoUrl, mergedAudioUrl })
+ *      → polling → resultado.video.url = vídeo final com áudio ✅
+ *
+ * O frontend identifica que é a última etapa pela flag `done: true` na resposta.
+ *
+ * @param {Object} input
+ * @param {'start'|'merge-audios'|'merge-final'} [input.stage='start']
+ * @param {string[]} input.videoUrls          — sempre obrigatório (ordem dos takes)
+ * @param {string[]} [input.audioUrls]        — só se modo voiced
+ * @param {string}   [input.mergedVideoUrl]   — pra stages != 'start'
+ * @param {string}   [input.mergedAudioUrl]   — pra stage 'merge-final'
+ * @returns {Promise<{requestId, endpoint, statusUrl, responseUrl, stage, nextStage, done, mode}>}
+ */
+export async function composePovFinal(input) {
+  const res = await fetch('/api/pov-compose-final', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('pov-compose-final response (not JSON):', res.status, text.substring(0, 500));
+    throw new Error(`Erro ao compor vídeo final POV (${res.status}).`);
   }
   if (data.error) {
     throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
