@@ -4,6 +4,7 @@ import { callClaude, generateContent, searchTrends, generateImage, generateBackP
 import ProfileManager from './ProfileManager';
 import VtonStudio from './VtonStudio';
 import UgcStudio from './UgcStudio';
+import PovStudio from './PovStudio';
 import InfluencerManager from './InfluencerManager';
 import './styles.css';
 
@@ -796,6 +797,23 @@ export default function App() {
           🎤 UGC Falante
         </button>
         <button
+          onClick={() => switchTab('pov')}
+          style={{
+            background: tab === 'pov' ? 'var(--gd)' : 'transparent',
+            border: tab === 'pov' ? '1px solid var(--gb)' : '1px solid var(--bd)',
+            color: tab === 'pov' ? 'var(--g)' : 'var(--t2)',
+            padding: '8px 18px',
+            borderRadius: 20,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            transition: 'all 0.2s',
+          }}
+        >
+          🎬 POV
+        </button>
+        <button
           onClick={() => switchTab('influencers')}
           style={{
             background: tab === 'influencers' ? 'var(--gd)' : 'transparent',
@@ -818,6 +836,7 @@ export default function App() {
       {tab === 'legacy' && <LegacyApp />}
       {tab === 'vton' && <VtonStudio />}
       {tab === 'ugc' && <UgcStudio onSwitchTab={switchTab} />}
+      {tab === 'pov' && <PovStudio onSwitchTab={switchTab} />}
       {tab === 'influencers' && <InfluencerManager />}
     </div>
   );
