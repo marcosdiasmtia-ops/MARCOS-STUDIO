@@ -1,9 +1,9 @@
-// src/PovWizard.jsx (v1.1 — Sub-lote 3b.1 — Steps 4-10 implementados)
+// src/PovWizard.jsx (v1.2 — Sub-lote 3b.2 — wizard COMPLETO + onComplete)
 //
 // Wizard principal da aba POV. Coleta todas as decisões do usuário pra gerar
 // um vídeo POV (Point of View) pra TikTok Shop.
 //
-// SUB-LOTE 3b.1 (atual):
+// SUB-LOTE 3b.2 (atual):
 //   ✅ Step 1: Influencer
 //   ✅ Step 2: Produto (7 campos)
 //   ✅ Step 3: Tipo de POV (11 opções) + ✨ Claude sugere
@@ -14,11 +14,14 @@
 //   ✅ Step 8: Áudio (Sem voz ⟷ Com voz · com warning experimental)
 //   ✅ Step 9: Voz/Roteiro (auto-selecionada se voiced; modo silent skipa visual)
 //   ✅ Step 10: Música (sugestão via callClaude — Comercial + Viral)
-//   🚧 Step 11: Placeholder (vem no Sub-lote 3b.2 com pipeline + resultado)
+//   ✅ Step 11: REMOVIDO — botão "🎬 Gerar POV" no Step 10 chama onComplete(wizardData)
+//                pra container (PovStudio) trocar pra modo 'output' (PovOutput)
 //
-// SUB-LOTE 3b.2 (próximo):
-//   - Step 11: PovOutput recebe wizardData consolidado, dispara pipeline
-//     completa (7 helpers), faz polling visual, mostra vídeo final + pacote
+// MUDANÇA PRINCIPAL DO 3b.2:
+//   - Step 10 vira o último step navegável
+//   - Botão "🎬 Gerar POV" consolida wizardData (extraindo base64 das fotos)
+//     e chama onComplete(wizardData) — sem ir pra step 11 visualmente
+//   - PovStudio recebe wizardData e renderiza PovOutput (que dispara pipeline)
 
 import { useState, useEffect, useMemo } from 'react';
 import {
@@ -189,7 +192,81 @@ export default function PovWizard({ onComplete, onSwitchTab }) {
 
   function handleAdvance() {
     if (!canAdvance()) return;
+
+    // Step 10 → último step navegável. Consolida wizardData e chama
+    // onComplete(wizardData) — PovStudio troca pra modo 'output' (PovOutput).
+    if (step === 10) {
+      const wizardData = buildWizardData();
+      if (onComplete) {
+        onComplete(wizardData);
+      } else {
+        console.warn('[PovWizard] step 10 OK mas onComplete não fornecido (modo standalone)');
+        setStep(11); // só vai pra placeholder se não tem callback
+      }
+      return;
+    }
+
     if (step < TOTAL_STEPS) setStep((s) => s + 1);
+  }
+
+  // ── Consolida todos os dados do wizard num objeto pro PovOutput ──────
+  function buildWizardData() {
+    // Tenta extrair base64 da face do influencer (modo 'influencer')
+    let influencerFaceBase64 = null;
+    let influencerFaceMimeType = null;
+    if (handsMode === 'influencer' && selectedProfile) {
+      const faceUrl = selectedProfile.facePhotoUrl || selectedProfile.previewUrl;
+      const parsed = dataUrlToBase64(faceUrl);
+      if (parsed) {
+        influencerFaceBase64 = parsed.base64;
+        influencerFaceMimeType = parsed.mimeType;
+      }
+    }
+
+    return {
+      // produto
+      productName,
+      productDescription,
+      productPrice,
+      productOriginalPrice,
+      productCategoryId,
+      productPhotoBase64: productPhoto?.base64 || null,
+      productPhotoMimeType: productPhoto?.mimeType || null,
+      productViralTranscript,
+
+      // influencer
+      influencerId: selectedProfileId,
+      influencerName: selectedProfile?.name || null,
+      influencerGender: influencerGender,
+      influencerFaceBase64,
+      influencerFaceMimeType,
+
+      // POV config
+      typeId,
+      scenarioId,
+      styleId,
+      durationId,
+      handsMode,
+      handsId,
+      audioMode,
+      voiceId: audioMode === 'voiced' ? voiceId : null,
+
+      // música (do step 10) — opcional
+      musicSuggestion: musicSuggestion || null,
+    };
+  }
+
+  // ── Helper: dataURL → { base64, mimeType } ───────────────────────────
+  function dataUrlToBase64(dataUrl) {
+    if (!dataUrl || typeof dataUrl !== 'string') return null;
+    if (!dataUrl.startsWith('data:')) return null;
+    const [header, base64] = dataUrl.split(',');
+    if (!base64) return null;
+    const mimeMatch = header.match(/data:([^;]+)/);
+    return {
+      base64,
+      mimeType: mimeMatch?.[1] || 'image/jpeg',
+    };
   }
 
   // ── Step 2: handler de upload de foto do produto ─────────────────────
@@ -1074,7 +1151,7 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
           onClick={handleAdvance}
           disabled={!canAdvance()}
         >
-          {step === 10 ? '🎬 Pronto pra gerar →' : (step === TOTAL_STEPS ? '🎬 Gerar POV' : 'Avançar →')}
+          {step === 10 ? '🎬 Gerar POV' : (step === TOTAL_STEPS ? '🎬 Gerar POV' : 'Avançar →')}
         </button>
       </div>
 
@@ -1083,13 +1160,29 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
           Preencha os campos obrigatórios pra avançar.
         </p>
       )}
+      {step === 10 && canAdvance() && (
+        <p className="hint" style={{ textAlign: 'center', marginTop: 12, fontSize: 12, color: 'var(--gr)' }}>
+          ✓ Tudo pronto! Custo estimado: ~${getEstimatedCost(durationId, audioMode)}.
+        </p>
+      )}
       {step === 11 && (
         <p className="hint" style={{ textAlign: 'center', marginTop: 12, fontSize: 12 }}>
-          Esta etapa está em construção. Volte ou aguarde a Sessão 3b.2.
+          Esta etapa não deveria ser visível. Se viu, é fallback porque onComplete não foi fornecido.
         </p>
       )}
     </div>
   );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Helper de custo estimado (pra mostrar no Step 10 antes de gerar)
+// ════════════════════════════════════════════════════════════════════════
+
+function getEstimatedCost(durationId, audioMode) {
+  const dur = POV_DURATIONS.find((d) => d.id === durationId);
+  if (!dur) return '?';
+  const cost = audioMode === 'voiced' ? dur.estimatedCostVoiced : dur.estimatedCostSilent;
+  return cost?.toFixed(2) || '?';
 }
 
 // ════════════════════════════════════════════════════════════════════════
