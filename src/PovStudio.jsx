@@ -1,19 +1,22 @@
-// src/PovStudio.jsx (v1.0 — Sub-lote 3a — container da aba POV)
+// src/PovStudio.jsx (v1.1 — Sub-lote 3b.2 — output mode funcional)
 //
 // Container principal da aba POV. Roteia entre 3 modos:
 //   - 'wizard'   → PovWizard (formulário de 11 passos pra gerar vídeo)
-//   - 'output'   → PovOutput (tela final com vídeo + pacote postagem) [3c]
+//   - 'output'   → PovOutput (pipeline + tela final com vídeo + pacote) ✅ NOVO 3b.2
 //   - 'gallery'  → PovGallery (POVs gerados anteriormente) [3c]
 //
-// SUB-LOTE 3a: só implementa o modo 'wizard'. Os outros são placeholders
-// até as Sessões 3b/3c.
+// SUB-LOTE 3b.2 atual:
+//   ✅ Wizard completa (steps 1-10)
+//   ✅ Output funcional (pipeline + resultado)
+//   🚧 Galeria fica pro 3c
 //
 // PROPS:
-//   - onSwitchTab(tabName) — callback pra ir pra outras abas (ex: redirecionar
-//                            pra aba 'influencers' se zero influencers cadastradas)
+//   - onSwitchTab(tabName) — callback pra outras abas (ex: redirecionar pra
+//                            'influencers' se zero influencers cadastradas)
 
 import { useState } from 'react';
 import PovWizard from './PovWizard';
+import PovOutput from './PovOutput';
 
 const POV_GALLERY_KEY = 'marcos-studio-pov-gallery';
 
@@ -21,18 +24,18 @@ export default function PovStudio({ onSwitchTab }) {
   // 'wizard' | 'output' | 'gallery'
   const [mode, setMode] = useState('wizard');
 
-  // Resultado do wizard (preenchido quando usuário gera um POV) — usado em 3c
-  const [currentResult, setCurrentResult] = useState(null);
+  // wizardData consolidado quando o usuário clica "🎬 Gerar POV" no Step 10
+  // → vira input do PovOutput pra disparar a pipeline
+  const [wizardData, setWizardData] = useState(null);
 
-  // Sub-lote 3a: o wizard quando completar (no 3b) vai chamar onComplete(result).
-  // Por enquanto, o wizard nem termina — só implementamos os primeiros steps.
-  function handleWizardComplete(result) {
-    setCurrentResult(result);
+  // Wizard completo → consolida dados → vai pro modo output
+  function handleWizardComplete(data) {
+    setWizardData(data);
     setMode('output');
   }
 
   function handleStartNew() {
-    setCurrentResult(null);
+    setWizardData(null);
     setMode('wizard');
   }
 
@@ -105,12 +108,10 @@ export default function PovStudio({ onSwitchTab }) {
         />
       )}
 
-      {mode === 'output' && (
-        <PlaceholderCard
-          icon="🎬"
-          title="Tela Final do POV"
-          message="Esta tela mostrará o vídeo final gerado + pacote de postagem (descrição, hashtags, CTAs, sugestões de música). Disponível na Sessão 3c."
-          onBack={handleStartNew}
+      {mode === 'output' && wizardData && (
+        <PovOutput
+          wizardData={wizardData}
+          onStartNew={handleStartNew}
         />
       )}
 
