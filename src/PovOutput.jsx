@@ -1,0 +1,840 @@
+// src/PovOutput.jsx (v1.0 — Sub-lote 3b.2 — pipeline + tela final)
+//
+// Componente que recebe wizardData consolidado (do PovWizard) e:
+//   1. Dispara a pipeline POV completa (7 helpers em sequência/paralelo)
+//   2. Mostra UI de progresso visual em tempo real
+//   3. Quando termina, mostra tela final com vídeo + pacote postagem
+//   4. Persiste resultado em localStorage (galeria do 3c)
+//
+// PIPELINE MODO SILENT (default) — 6 etapas:
+//   1. generatePovScript        (audioMode: 'silent')
+//   2. generatePovKlingPrompts
+//   3. uploadToFal × 1-2        (produto + (se influencer) face)
+//   4. generatePovImageBase × N (Promise.all)
+//   5. submitPovKlingVideo × N + polling × N (Promise.all)
+//   6. composePovFinal stage='start' + polling
+//
+// PIPELINE MODO VOICED — adiciona:
+//   - Passo 4.5 (paralelo): generatePovTTS × N (Promise.all)
+//   - Passo 6 vira 3 chamadas: 'start' → 'merge-audios' → 'merge-final'
+//
+// PROPS:
+//   wizardData: objeto consolidado do wizard (todos campos)
+//   onStartNew: callback pra voltar pro wizard limpo
+//   onSwitchTab: callback (não usado aqui, repassado pra placeholders)
+
+import { useState, useEffect, useRef } from 'react';
+import {
+  generatePovScript,
+  generatePovKlingPrompts,
+  uploadToFal,
+  generatePovImageBase,
+  submitPovKlingVideo,
+  generatePovTTS,
+  composePovFinal,
+  checkVideoStatus,
+} from './api';
+import { POV_TYPES } from './data/pov-types';
+import { POV_SCENARIOS } from './data/pov-scenarios';
+import { POV_HANDS } from './data/pov-hands';
+import { POV_STYLES } from './data/pov-styles';
+import { POV_DURATIONS } from './data/pov-durations';
+
+const POV_GALLERY_KEY = 'marcos-studio-pov-gallery';
+const KLING_POLL_INTERVAL_MS = 12000; // 12s
+const KLING_POLL_MAX_ATTEMPTS = 35;   // ~7min max
+const COMPOSE_POLL_INTERVAL_MS = 4000; // 4s
+const COMPOSE_POLL_MAX_ATTEMPTS = 30;  // ~2min max
+
+export default function PovOutput({ wizardData, onStartNew }) {
+  // ── Phase machine ─────────────────────────────────────────────────────
+  // 'starting' | 'generating' | 'complete' | 'failed'
+  const [phase, setPhase] = useState('starting');
+
+  // ── Estágio atual + mensagem visível ──────────────────────────────────
+  const [stages, setStages] = useState([
+    { id: 'script',     label: '📝 Roteiro',                status: 'pending' },
+    { id: 'prompts',    label: '✍️  Prompts visuais',        status: 'pending' },
+    { id: 'upload',     label: '📤 Upload do produto',      status: 'pending' },
+    { id: 'images',     label: '🖼  Imagens-base',           status: 'pending' },
+    { id: 'videos',     label: '🎬 Vídeos Kling',           status: 'pending' },
+    { id: 'audios',     label: '🎙️  Narrações (Eleven v3)',   status: 'pending', skipIfSilent: true },
+    { id: 'compose',    label: '🔧 Composição final',       status: 'pending' },
+  ]);
+
+  // ── Status individual por take (durante imagens + vídeos + áudios) ───
+  // [{ takeNumber, imageStatus, videoStatus, audioStatus, imageUrl, videoUrl, audioUrl, error }]
+  const [takes, setTakes] = useState([]);
+
+  // ── Mensagem flash do que tá acontecendo ──────────────────────────────
+  const [statusMessage, setStatusMessage] = useState('Iniciando geração...');
+
+  // ── Resultado final (quando complete) ─────────────────────────────────
+  const [finalVideoUrl, setFinalVideoUrl] = useState(null);
+  const [packageData, setPackageData] = useState(null);
+
+  // ── Erro (se failed) ──────────────────────────────────────────────────
+  const [error, setError] = useState(null);
+
+  // ── Tempo decorrido ───────────────────────────────────────────────────
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const startTimeRef = useRef(Date.now());
+
+  // ── Flag pra evitar dupla execução em StrictMode ──────────────────────
+  const startedRef = useRef(false);
+
+  // ── Helpers de update de stages e takes ───────────────────────────────
+  function setStageStatus(stageId, status) {
+    setStages((prev) => prev.map((s) => s.id === stageId ? { ...s, status } : s));
+  }
+
+  function updateTake(takeNumber, updates) {
+    setTakes((prev) => prev.map((t) => t.takeNumber === takeNumber ? { ...t, ...updates } : t));
+  }
+
+  // ── Timer ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (phase !== 'generating') return;
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  // ── Dispara pipeline na montagem ──────────────────────────────────────
+  useEffect(() => {
+    if (startedRef.current) return; // proteção contra StrictMode
+    startedRef.current = true;
+    runPipeline();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PIPELINE PRINCIPAL
+  // ═══════════════════════════════════════════════════════════════════════
+  async function runPipeline() {
+    try {
+      setPhase('generating');
+      startTimeRef.current = Date.now();
+      const isVoiced = wizardData.audioMode === 'voiced';
+      const duration = POV_DURATIONS.find((d) => d.id === wizardData.durationId);
+      if (!duration) throw new Error('Duração inválida');
+      const N = duration.takes;
+
+      // Cria slots dos takes
+      const initialTakes = Array.from({ length: N }, (_, i) => ({
+        takeNumber: i + 1,
+        imageStatus: 'pending',
+        videoStatus: 'pending',
+        audioStatus: isVoiced ? 'pending' : null,
+        imageUrl: null,
+        videoUrl: null,
+        audioUrl: null,
+        error: null,
+      }));
+      setTakes(initialTakes);
+
+      // ── ETAPA 1: Roteiro ─────────────────────────────────────────────
+      setStatusMessage('📝 Gerando roteiro de N takes...');
+      setStageStatus('script', 'in-progress');
+      const scriptResult = await generatePovScript({
+        productName: wizardData.productName,
+        productDescription: wizardData.productDescription || undefined,
+        productPrice: wizardData.productPrice || undefined,
+        productOriginalPrice: wizardData.productOriginalPrice || undefined,
+        categoryId: wizardData.productCategoryId,
+        typeId: wizardData.typeId,
+        scenarioId: wizardData.scenarioId,
+        styleId: wizardData.styleId,
+        durationId: wizardData.durationId,
+        audioMode: wizardData.audioMode,
+        voiceId: isVoiced ? wizardData.voiceId : undefined,
+        influencer: { name: wizardData.influencerName, gender: wizardData.influencerGender },
+        trendData: wizardData.productViralTranscript || undefined,
+      });
+      if (!scriptResult.script || scriptResult.script.length !== N) {
+        throw new Error(`Roteiro retornou ${scriptResult.script?.length} takes, esperado ${N}`);
+      }
+      setStageStatus('script', 'done');
+
+      // ── ETAPA 2: Prompts Kling ───────────────────────────────────────
+      setStatusMessage('✍️ Gerando prompts visuais pro Kling...');
+      setStageStatus('prompts', 'in-progress');
+      const handsConfig = {
+        mode: wizardData.handsMode,
+        handsId: wizardData.handsMode === 'anonymous' ? wizardData.handsId : undefined,
+        gender: wizardData.influencerGender,
+      };
+      const promptsResult = await generatePovKlingPrompts({
+        script: scriptResult.script,
+        typeId: wizardData.typeId,
+        scenarioId: wizardData.scenarioId,
+        styleId: wizardData.styleId,
+        handsConfig,
+        productName: wizardData.productName,
+        productDescription: wizardData.productDescription || undefined,
+        productPhotoBase64: wizardData.productPhotoBase64,
+        productPhotoMimeType: wizardData.productPhotoMimeType,
+      });
+      if (!promptsResult.prompts || promptsResult.prompts.length !== N) {
+        throw new Error(`Prompts Kling retornou ${promptsResult.prompts?.length}, esperado ${N}`);
+      }
+      setStageStatus('prompts', 'done');
+
+      // ── ETAPA 3: Upload pra fal.ai ───────────────────────────────────
+      setStatusMessage('📤 Enviando produto pra fal.ai...');
+      setStageStatus('upload', 'in-progress');
+      const productPhotoUrl = await uploadToFal(
+        wizardData.productPhotoBase64,
+        wizardData.productPhotoMimeType,
+        'pov-product.png'
+      );
+      let handsReferenceUrl = null;
+      if (wizardData.handsMode === 'influencer' && wizardData.influencerFaceBase64) {
+        handsReferenceUrl = await uploadToFal(
+          wizardData.influencerFaceBase64,
+          wizardData.influencerFaceMimeType || 'image/jpeg',
+          'pov-face-ref.jpg'
+        );
+      }
+      setStageStatus('upload', 'done');
+
+      // ── ETAPA 4: Imagens-base (paralelo) ─────────────────────────────
+      setStatusMessage(`🖼 Gerando ${N} imagens-base em paralelo...`);
+      setStageStatus('images', 'in-progress');
+      const imagePromises = promptsResult.prompts.map(async (p, idx) => {
+        const takeNumber = idx + 1;
+        updateTake(takeNumber, { imageStatus: 'in-progress' });
+        try {
+          const imgPrompt = buildImagePrompt(p.klingPrompt, wizardData);
+          const result = await generatePovImageBase({
+            productPhotoUrl,
+            handsReferenceUrl: handsReferenceUrl || undefined,
+            prompt: imgPrompt,
+            takeNumber,
+          });
+          updateTake(takeNumber, { imageStatus: 'done', imageUrl: result.imageUrl });
+          return { takeNumber, imageUrl: result.imageUrl };
+        } catch (err) {
+          updateTake(takeNumber, { imageStatus: 'failed', error: err.message });
+          throw err;
+        }
+      });
+      const imageResults = await Promise.all(imagePromises);
+      setStageStatus('images', 'done');
+
+      // ── ETAPA 5a: Submeter vídeos Kling (paralelo) + polling ─────────
+      setStatusMessage(`🎬 Submetendo ${N} vídeos ao Kling 2.6 Pro...`);
+      setStageStatus('videos', 'in-progress');
+      const videoSubmissions = await Promise.all(
+        promptsResult.prompts.map(async (p, idx) => {
+          const takeNumber = idx + 1;
+          const startImageUrl = imageResults[idx].imageUrl;
+          updateTake(takeNumber, { videoStatus: 'submitted' });
+          const sub = await submitPovKlingVideo({
+            prompt: p.klingPrompt,
+            startImageUrl,
+            duration: '10',
+            generateAudio: false,
+            takeNumber,
+          });
+          updateTake(takeNumber, { videoStatus: 'in-progress' });
+          return { takeNumber, ...sub };
+        })
+      );
+
+      setStatusMessage(`⏳ Kling renderizando ${N} vídeos (2-7min cada). Pode pegar um café ☕`);
+      const videoPromises = videoSubmissions.map(async (sub) => {
+        try {
+          const result = await pollUntilComplete(
+            sub,
+            { intervalMs: KLING_POLL_INTERVAL_MS, maxAttempts: KLING_POLL_MAX_ATTEMPTS }
+          );
+          const url = result?.video?.url;
+          if (!url) throw new Error('Kling retornou sem URL de vídeo');
+          updateTake(sub.takeNumber, { videoStatus: 'done', videoUrl: url });
+          return { takeNumber: sub.takeNumber, videoUrl: url };
+        } catch (err) {
+          updateTake(sub.takeNumber, { videoStatus: 'failed', error: err.message });
+          throw new Error(`Take ${sub.takeNumber}: ${err.message}`);
+        }
+      });
+
+      // ── ETAPA 5b (PARALELO se voiced): Gerar áudios ──────────────────
+      let audioPromise = Promise.resolve([]);
+      if (isVoiced) {
+        setStageStatus('audios', 'in-progress');
+        audioPromise = Promise.all(
+          scriptResult.script.map(async (take) => {
+            const tn = take.takeNumber;
+            updateTake(tn, { audioStatus: 'in-progress' });
+            try {
+              if (!take.voiceText) {
+                throw new Error('Roteiro sem voiceText');
+              }
+              const result = await generatePovTTS({
+                text: take.voiceText,
+                voiceId: wizardData.voiceId,
+                takeNumber: tn,
+              });
+              updateTake(tn, { audioStatus: 'done', audioUrl: result.audioUrl });
+              return { takeNumber: tn, audioUrl: result.audioUrl };
+            } catch (err) {
+              updateTake(tn, { audioStatus: 'failed', error: err.message });
+              throw err;
+            }
+          })
+        );
+      }
+
+      const [videoResults, audioResults] = await Promise.all([
+        Promise.all(videoPromises),
+        audioPromise,
+      ]);
+
+      setStageStatus('videos', 'done');
+      if (isVoiced) setStageStatus('audios', 'done');
+
+      // ── ETAPA 6: Compose final stateful ─────────────────────────────
+      setStageStatus('compose', 'in-progress');
+      const sortedVideos = [...videoResults].sort((a, b) => a.takeNumber - b.takeNumber);
+      const videoUrls = sortedVideos.map((v) => v.videoUrl);
+
+      let finalUrl;
+      if (!isVoiced) {
+        // Modo silent: 1 chamada
+        setStatusMessage('🔧 Concatenando vídeos via FFmpeg...');
+        const sub = await composePovFinal({ stage: 'start', videoUrls });
+        const result = await pollUntilComplete(sub, {
+          intervalMs: COMPOSE_POLL_INTERVAL_MS,
+          maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS,
+        });
+        finalUrl = result?.video?.url;
+      } else {
+        // Modo voiced: 3 chamadas
+        const sortedAudios = [...audioResults].sort((a, b) => a.takeNumber - b.takeNumber);
+        const audioUrls = sortedAudios.map((a) => a.audioUrl);
+
+        setStatusMessage('🔧 Concatenando vídeos (1/3)...');
+        const sub1 = await composePovFinal({ stage: 'start', videoUrls, audioUrls });
+        const r1 = await pollUntilComplete(sub1, { intervalMs: COMPOSE_POLL_INTERVAL_MS, maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS });
+        const mergedVideoUrl = r1?.video?.url;
+        if (!mergedVideoUrl) throw new Error('Compose stage 1 sem mergedVideoUrl');
+
+        setStatusMessage('🔧 Concatenando áudios (2/3)...');
+        const sub2 = await composePovFinal({ stage: 'merge-audios', videoUrls, audioUrls, mergedVideoUrl });
+        const r2 = await pollUntilComplete(sub2, { intervalMs: COMPOSE_POLL_INTERVAL_MS, maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS });
+        const mergedAudioUrl = r2?.audio?.url;
+        if (!mergedAudioUrl) throw new Error('Compose stage 2 sem mergedAudioUrl');
+
+        setStatusMessage('🔧 Mesclando vídeo + áudio (3/3)...');
+        const sub3 = await composePovFinal({ stage: 'merge-final', videoUrls, mergedVideoUrl, mergedAudioUrl });
+        const r3 = await pollUntilComplete(sub3, { intervalMs: COMPOSE_POLL_INTERVAL_MS, maxAttempts: COMPOSE_POLL_MAX_ATTEMPTS });
+        finalUrl = r3?.video?.url;
+      }
+
+      if (!finalUrl) throw new Error('Composição não retornou URL final');
+      setStageStatus('compose', 'done');
+
+      // ── SUCESSO ──────────────────────────────────────────────────────
+      const pkg = {
+        description: scriptResult.description,
+        hashtags: scriptResult.hashtags,
+        ctaWritten: scriptResult.ctaWritten,
+        script: scriptResult.script,
+        musicSuggestion: wizardData.musicSuggestion || null,
+      };
+      setFinalVideoUrl(finalUrl);
+      setPackageData(pkg);
+      setPhase('complete');
+      setStatusMessage('✨ Vídeo POV pronto!');
+
+      // Persiste em localStorage pra galeria do 3c
+      savePovToGallery({
+        id: `pov_${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        finalVideoUrl: finalUrl,
+        wizardData: pickSerializable(wizardData),
+        packageData: pkg,
+        takesData: sortedVideos,
+      });
+    } catch (err) {
+      console.error('[PovOutput] pipeline falhou:', err);
+      setError(err.message || String(err));
+      setPhase('failed');
+      setStatusMessage(`❌ Erro: ${err.message}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // POLLING HELPER
+  // ═══════════════════════════════════════════════════════════════════════
+  async function pollUntilComplete(submission, { intervalMs, maxAttempts }) {
+    for (let i = 0; i < maxAttempts; i++) {
+      const status = await checkVideoStatus(
+        submission.requestId,
+        submission.endpoint,
+        submission.statusUrl,
+        submission.responseUrl
+      );
+      if (status.status === 'COMPLETED') return status.result;
+      if (status.status === 'FAILED' || status.status === 'ERROR') {
+        throw new Error(`fal.ai retornou ${status.status}: ${JSON.stringify(status).substring(0, 200)}`);
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    throw new Error(`Polling timeout após ${maxAttempts} tentativas (~${Math.round(maxAttempts * intervalMs / 60000)}min)`);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════
+  if (phase === 'generating' || phase === 'starting') {
+    return renderGenerating();
+  }
+  if (phase === 'failed') {
+    return renderFailed();
+  }
+  if (phase === 'complete') {
+    return renderComplete();
+  }
+  return null;
+
+  // ── RENDER: GERANDO ──────────────────────────────────────────────────
+  function renderGenerating() {
+    const isVoiced = wizardData.audioMode === 'voiced';
+    const visibleStages = stages.filter((s) => !s.skipIfSilent || isVoiced);
+    const completedCount = visibleStages.filter((s) => s.status === 'done').length;
+    const totalCount = visibleStages.length;
+    const overallPercent = Math.round((completedCount / totalCount) * 100);
+
+    return (
+      <div className="card">
+        <div style={{ textAlign: 'center', marginBottom: 20 }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>
+            <span className="spinner" style={{
+              display: 'inline-block',
+              width: 48,
+              height: 48,
+              border: '3px solid rgba(212,165,116,0.2)',
+              borderTopColor: 'var(--g)',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite',
+            }} />
+          </div>
+          <h2 style={{ fontSize: 18, color: 'var(--g)', marginBottom: 8, fontWeight: 700 }}>
+            Gerando seu POV...
+          </h2>
+          <p style={{ fontSize: 13, color: 'var(--t2)', marginBottom: 4 }}>
+            {statusMessage}
+          </p>
+          <p style={{ fontSize: 11, color: 'var(--t3)' }}>
+            ⏱ {formatTime(elapsedSeconds)} decorridos · estimativa total: 5-10 min
+          </p>
+        </div>
+
+        {/* Barra de progresso geral */}
+        <div style={{
+          height: 6,
+          background: 'var(--bd)',
+          borderRadius: 3,
+          overflow: 'hidden',
+          marginBottom: 20,
+        }}>
+          <div style={{
+            height: '100%',
+            background: 'linear-gradient(90deg, var(--g), #c08f5c)',
+            width: `${overallPercent}%`,
+            transition: 'width 0.5s',
+          }} />
+        </div>
+
+        {/* Lista de etapas */}
+        <div style={{
+          background: 'var(--cd)',
+          border: '1px solid var(--bd)',
+          borderRadius: 'var(--rs)',
+          padding: 14,
+          marginBottom: 16,
+        }}>
+          <div style={{ fontSize: 11, color: 'var(--t2)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+            Etapas
+          </div>
+          {visibleStages.map((s) => (
+            <div key={s.id} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '6px 0',
+              fontSize: 13,
+              color: s.status === 'done' ? 'var(--gr)'
+                : s.status === 'in-progress' ? 'var(--g)'
+                : s.status === 'failed' ? '#ff6b6b'
+                : 'var(--t3)',
+            }}>
+              <span style={{ width: 16, textAlign: 'center' }}>
+                {s.status === 'done' ? '✓'
+                  : s.status === 'in-progress' ? '⏳'
+                  : s.status === 'failed' ? '✗'
+                  : '○'}
+              </span>
+              <span>{s.label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Lista de takes (durante imagens/vídeos/áudios) */}
+        {takes.length > 0 && (
+          <div style={{
+            background: 'var(--sf)',
+            border: '1px solid var(--bd)',
+            borderRadius: 'var(--rs)',
+            padding: 14,
+          }}>
+            <div style={{ fontSize: 11, color: 'var(--t2)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+              Takes ({takes.length})
+            </div>
+            {takes.map((t) => (
+              <div key={t.takeNumber} style={{
+                display: 'grid',
+                gridTemplateColumns: '60px 1fr 1fr ' + (isVoiced ? '1fr' : ''),
+                gap: 8,
+                fontSize: 11,
+                padding: '6px 0',
+                borderBottom: '1px solid var(--bd)',
+                color: 'var(--t)',
+              }}>
+                <span style={{ color: 'var(--t2)', fontWeight: 600 }}>Take {t.takeNumber}:</span>
+                <TakeStatusPill label="🖼" status={t.imageStatus} />
+                <TakeStatusPill label="🎬" status={t.videoStatus} />
+                {isVoiced && <TakeStatusPill label="🎙️" status={t.audioStatus} />}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="hint" style={{ textAlign: 'center', marginTop: 16, fontSize: 11 }}>
+          ⚠️ Não feche esta aba enquanto o vídeo é gerado.
+          O Kling 2.6 Pro leva 2-7min por take pra renderizar.
+        </p>
+      </div>
+    );
+  }
+
+  // ── RENDER: FALHOU ───────────────────────────────────────────────────
+  function renderFailed() {
+    const completedTakes = takes.filter((t) => t.videoUrl);
+    return (
+      <div className="card">
+        <div style={{ textAlign: 'center', padding: '20px 0' }}>
+          <div style={{ fontSize: 56, marginBottom: 12 }}>❌</div>
+          <h2 style={{ fontSize: 18, color: '#ff6b6b', marginBottom: 12, fontWeight: 700 }}>
+            Geração falhou
+          </h2>
+          <div className="error-box" style={{ maxWidth: 460, margin: '0 auto 20px' }}>
+            <p>{error}</p>
+          </div>
+        </div>
+
+        {completedTakes.length > 0 && (
+          <div style={{
+            background: 'var(--blb)',
+            border: '1px solid rgba(139,184,232,0.25)',
+            borderRadius: 'var(--rs)',
+            padding: 14,
+            marginBottom: 16,
+          }}>
+            <div style={{ fontSize: 12, color: 'var(--bl)', fontWeight: 700, marginBottom: 8 }}>
+              ℹ️ {completedTakes.length} take(s) foram gerados antes do erro
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--t2)', lineHeight: 1.5 }}>
+              Você pode baixar manualmente e juntar no CapCut. URLs dos vídeos:
+            </div>
+            <ul style={{ marginTop: 8, paddingLeft: 20, fontSize: 11, color: 'var(--bl)' }}>
+              {completedTakes.map((t) => (
+                <li key={t.takeNumber} style={{ marginBottom: 4 }}>
+                  Take {t.takeNumber}:{' '}
+                  <a href={t.videoUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--bl)' }}>
+                    Abrir vídeo
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <button
+          className="main-btn"
+          onClick={onStartNew}
+          style={{ marginTop: 8 }}
+        >
+          ← Voltar pro wizard
+        </button>
+      </div>
+    );
+  }
+
+  // ── RENDER: COMPLETO ─────────────────────────────────────────────────
+  function renderComplete() {
+    return (
+      <div>
+        {/* Header de sucesso */}
+        <div className="card" style={{ textAlign: 'center', marginBottom: 14 }}>
+          <div style={{ fontSize: 48, marginBottom: 8 }}>🎉</div>
+          <h2 style={{ fontSize: 18, color: 'var(--g)', marginBottom: 6, fontWeight: 700 }}>
+            Vídeo POV pronto!
+          </h2>
+          <p style={{ fontSize: 12, color: 'var(--t2)' }}>
+            ⏱ Levou {formatTime(elapsedSeconds)} ·{' '}
+            {takes.length} take(s) ·{' '}
+            modo {wizardData.audioMode === 'voiced' ? 'com voz' : 'silencioso'}
+          </p>
+        </div>
+
+        {/* Player de vídeo */}
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <video
+            controls
+            autoPlay
+            muted
+            loop
+            playsInline
+            src={finalVideoUrl}
+            style={{ width: '100%', display: 'block', background: '#000', maxHeight: 600 }}
+          />
+        </div>
+
+        {/* Ações primárias */}
+        <div className="card" style={{ padding: 14 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <a
+              href={finalVideoUrl}
+              download={`pov-${wizardData.influencerName?.toLowerCase() || 'video'}-${Date.now()}.mp4`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="main-btn"
+              style={{
+                flex: 1,
+                minWidth: 140,
+                textDecoration: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              📥 Baixar MP4
+            </a>
+            <button
+              className="secondary-btn"
+              onClick={onStartNew}
+              style={{ flex: 1, minWidth: 140 }}
+            >
+              ✨ Novo POV
+            </button>
+          </div>
+          <p className="hint" style={{ textAlign: 'center', marginTop: 12, fontSize: 11 }}>
+            🖼 Galeria persistente + variação 1-clique vêm no Sub-lote 3c.
+          </p>
+        </div>
+
+        {/* Pacote de postagem */}
+        {packageData && (
+          <>
+            {/* Descrição */}
+            <CopyableSection
+              title="📝 Descrição (TikTok)"
+              text={packageData.description}
+            />
+
+            {/* Hashtags */}
+            <CopyableSection
+              title="#️⃣ Hashtags"
+              text={(packageData.hashtags || []).map((h) => h.startsWith('#') ? h : `#${h}`).join(' ')}
+            />
+
+            {/* CTA escrito */}
+            <CopyableSection
+              title="📣 CTA escrito"
+              text={packageData.ctaWritten || ''}
+            />
+
+            {/* Música sugerida */}
+            {packageData.musicSuggestion && (
+              <div className="card">
+                <div className="card-title">🎵 Música sugerida</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  {packageData.musicSuggestion.comercial && (
+                    <div style={{
+                      background: 'var(--blb)',
+                      border: '1px solid rgba(139,184,232,0.25)',
+                      borderRadius: 'var(--rs)',
+                      padding: 12,
+                    }}>
+                      <div style={{ fontSize: 10, color: 'var(--bl)', fontWeight: 700, marginBottom: 4, textTransform: 'uppercase' }}>
+                        🎵 Comercial
+                      </div>
+                      <div style={{ fontSize: 13, color: 'var(--t)' }}>
+                        {packageData.musicSuggestion.comercial.mood} ·{' '}
+                        {packageData.musicSuggestion.comercial.genre} ·{' '}
+                        {packageData.musicSuggestion.comercial.bpm} BPM
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
+                        Buscar: {(packageData.musicSuggestion.comercial.searchTerms || []).join(', ')}
+                      </div>
+                    </div>
+                  )}
+                  {packageData.musicSuggestion.viral && (
+                    <div style={{
+                      background: 'rgba(255,80,150,0.08)',
+                      border: '1px solid rgba(255,80,150,0.25)',
+                      borderRadius: 'var(--rs)',
+                      padding: 12,
+                    }}>
+                      <div style={{ fontSize: 10, color: '#ff6b9d', fontWeight: 700, marginBottom: 4, textTransform: 'uppercase' }}>
+                        🔥 Viral
+                      </div>
+                      <div style={{ fontSize: 13, color: 'var(--t)' }}>
+                        <strong>{packageData.musicSuggestion.viral.title}</strong>
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>
+                        {packageData.musicSuggestion.viral.artist}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Roteiro completo (frases on-screen + voiceText) */}
+            {packageData.script && packageData.script.length > 0 && (
+              <div className="card">
+                <div className="card-title">🎬 Roteiro por take</div>
+                {packageData.script.map((take) => (
+                  <div key={take.takeNumber} style={{
+                    background: 'var(--sf)',
+                    border: '1px solid var(--bd)',
+                    borderRadius: 'var(--rs)',
+                    padding: 12,
+                    marginBottom: 8,
+                  }}>
+                    <div style={{ fontSize: 12, color: 'var(--g)', fontWeight: 700, marginBottom: 6 }}>
+                      Take {take.takeNumber} {take.purpose && <span style={{ color: 'var(--t3)', fontWeight: 400 }}>· {take.purpose}</span>}
+                    </div>
+                    {take.voiceText && (
+                      <div style={{ fontSize: 12, color: 'var(--t)', marginBottom: 4 }}>
+                        🎙️ <em>{take.voiceText}</em>
+                      </div>
+                    )}
+                    {take.onScreenPhrase && (
+                      <div style={{ fontSize: 12, color: 'var(--bl)', fontWeight: 600 }}>
+                        📺 "{take.onScreenPhrase}"
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Componentes auxiliares
+// ════════════════════════════════════════════════════════════════════════
+
+function TakeStatusPill({ label, status }) {
+  const colors = {
+    'pending': { bg: 'var(--bd)', fg: 'var(--t3)', icon: '○' },
+    'in-progress': { bg: 'rgba(212,165,116,0.15)', fg: 'var(--g)', icon: '⏳' },
+    'submitted': { bg: 'rgba(139,184,232,0.15)', fg: 'var(--bl)', icon: '↑' },
+    'done': { bg: 'rgba(107,189,138,0.15)', fg: 'var(--gr)', icon: '✓' },
+    'failed': { bg: 'rgba(255,107,107,0.15)', fg: '#ff6b6b', icon: '✗' },
+  };
+  if (!status) return <span />;
+  const c = colors[status] || colors.pending;
+  return (
+    <span style={{
+      background: c.bg,
+      color: c.fg,
+      padding: '2px 8px',
+      borderRadius: 10,
+      fontSize: 10,
+      fontWeight: 600,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+    }}>
+      {label} {c.icon}
+    </span>
+  );
+}
+
+function CopyableSection({ title, text }) {
+  const [copied, setCopied] = useState(false);
+  if (!text) return null;
+  function handleCopy() {
+    navigator.clipboard?.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+  return (
+    <div className="card">
+      <div className="card-header-row">
+        <div className="card-title">{title}</div>
+        <button
+          className="copy-btn"
+          onClick={handleCopy}
+          data-copied={copied ? 'true' : 'false'}
+        >
+          {copied ? '✓ Copiado' : '📋 Copiar'}
+        </button>
+      </div>
+      <pre className="code-content" style={{ maxHeight: 200 }}>{text}</pre>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Helpers puros
+// ════════════════════════════════════════════════════════════════════════
+
+function buildImagePrompt(klingPrompt, wizardData) {
+  // Reusa o klingPrompt (já é em inglês, descritivo) como base do prompt de
+  // imagem-base do Nano Banana. Adiciona um sufixo curto pra direcionar pra
+  // composição estática (Kling pega cena dinâmica, Nano gera o frame inicial).
+  return `${klingPrompt} Static composition, cinematic product photography style, sharp focus on the product, high detail, 9:16 aspect ratio.`;
+}
+
+function pickSerializable(wizardData) {
+  // Retira campos pesados (base64) antes de salvar no localStorage
+  const {
+    productPhotoBase64, productPhotoMimeType,
+    influencerFaceBase64, influencerFaceMimeType,
+    ...rest
+  } = wizardData;
+  return rest;
+}
+
+function savePovToGallery(entry) {
+  try {
+    const raw = localStorage.getItem(POV_GALLERY_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    list.unshift(entry);
+    // Limita a 50 entradas
+    while (list.length > 50) list.pop();
+    localStorage.setItem(POV_GALLERY_KEY, JSON.stringify(list));
+    console.log('[PovOutput] salvo na galeria:', entry.id);
+  } catch (err) {
+    console.warn('[PovOutput] erro salvando na galeria:', err);
+  }
+}
+
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
