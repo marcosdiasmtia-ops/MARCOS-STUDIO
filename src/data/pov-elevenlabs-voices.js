@@ -24,17 +24,27 @@
 //   - Limite 3.000 chars (sobra muito — POV 60s tem ~900 chars de fala)
 //   - Mesma lista de vozes do Multilingual v2 funciona idêntica
 //
+// 🔄 Plano v4 (sessão 11/05/2026) — campo intensityProfile novo:
+// Cada voz agora tem `intensityProfile: [...]` — array de IDs de
+// intensidade do `./pov-intensities.js` em que aquela voz funciona bem.
+// É o mapping REVERSO do `recommendedVoices` de POV_INTENSITIES.
+// Útil pra UI do C1 (Step 9 reformado): quando o usuário escolhe uma
+// intensidade, o PovWizard destaca as vozes cujo intensityProfile
+// contém aquela intensidade, ficando outras dimmed.
+//
 // Cada voz tem:
 //   - id: nome ElevenLabs (passa direto pro fal.ai como string)
 //   - gender: 'female' | 'male'
 //   - tone: característica do tom
 //   - description: 1 linha em PT-BR pra UI
 //   - confirmed: true (todas — listadas no schema oficial do fal.ai)
+//   - intensityProfile: array de IDs de intensidade (NOVO no Plano v4)
 //
 // MAPEAMENTO Estilo → Voz é DUPLO (F + M) pra suportar voz dinâmica
 // que herda do gênero da influencer cadastrada (modo padrão).
 //
 // Referência: 🎬 Arquitetura Aba POV (v1.0) no Notion · seção B3+B4.
+//             📋 Sessão 11/05/2026 — Plano consolidado v4 (refine v4).
 
 // ── Endpoint fal.ai escolhido ─────────────────────────────────────────
 
@@ -57,26 +67,135 @@ export const ELEVENLABS_V3_AUDIO_TAGS = {
 };
 
 // ── 15 vozes (8F + 7M) ────────────────────────────────────────────────
+//
+// 🆕 intensityProfile: cada voz lista as intensidades de `pov-intensities.js`
+// em que se encaixa bem (mapping derivado do `recommendedVoices` daquele
+// arquivo). Ordem do array é por nível crescente, não por preferência.
 
 export const POV_ELEVENLABS_VOICES = [
   // ── 8 vozes femininas ────────────────────────────────────────────
-  { id: 'Sarah',     gender: 'female', tone: 'youthful_warm',  description: 'Jovem e calorosa, vibe Geração Z amigável.',     confirmed: true },
-  { id: 'Aria',      gender: 'female', tone: 'bright_vibrant', description: 'Vibrante e expressiva, vibe TikTok energética.', confirmed: true },
-  { id: 'Charlotte', gender: 'female', tone: 'smooth_soft',    description: 'Suave e refinada, vibe íntima elegante.',        confirmed: true },
-  { id: 'Alice',     gender: 'female', tone: 'clear_neutral',  description: 'Clara e neutra, vibe profissional confiável.',   confirmed: true },
-  { id: 'Matilda',   gender: 'female', tone: 'warm_friendly',  description: 'Calorosa e acolhedora, vibe conversa amigável.', confirmed: true },
-  { id: 'Lily',      gender: 'female', tone: 'youthful_light', description: 'Leve e fresca, vibe pop jovem.',                 confirmed: true },
-  { id: 'Jessica',   gender: 'female', tone: 'mature_calm',    description: 'Madura e calma, vibe consultora especialista.',  confirmed: true },
-  { id: 'Laura',     gender: 'female', tone: 'mature_warm',    description: 'Madura e quente, vibe storytelling acolhedora.', confirmed: true },
+  {
+    id: 'Sarah',
+    gender: 'female',
+    tone: 'youthful_warm',
+    description: 'Jovem e calorosa, vibe Geração Z amigável.',
+    confirmed: true,
+    intensityProfile: ['tiktok_casual', 'iphone_cru', 'amigo_empolgado'],
+  },
+  {
+    id: 'Aria',
+    gender: 'female',
+    tone: 'bright_vibrant',
+    description: 'Vibrante e expressiva, vibe TikTok energética.',
+    confirmed: true,
+    intensityProfile: ['iphone_cru', 'amigo_empolgado', 'hype_urgente'],
+  },
+  {
+    id: 'Charlotte',
+    gender: 'female',
+    tone: 'smooth_soft',
+    description: 'Suave e refinada, vibe íntima elegante.',
+    confirmed: true,
+    intensityProfile: ['comercial_limpo', 'noturna_calma', 'luxo_contemplativo'],
+  },
+  {
+    id: 'Alice',
+    gender: 'female',
+    tone: 'clear_neutral',
+    description: 'Clara e neutra, vibe profissional confiável.',
+    confirmed: true,
+    intensityProfile: ['comercial_limpo', 'influencer_natural'],
+  },
+  {
+    id: 'Matilda',
+    gender: 'female',
+    tone: 'warm_friendly',
+    description: 'Calorosa e acolhedora, vibe conversa amigável.',
+    confirmed: true,
+    intensityProfile: ['influencer_natural', 'tiktok_casual', 'recomendacao_confiavel'],
+  },
+  {
+    id: 'Lily',
+    gender: 'female',
+    tone: 'youthful_light',
+    description: 'Leve e fresca, vibe pop jovem.',
+    confirmed: true,
+    intensityProfile: ['tiktok_casual', 'iphone_cru', 'amigo_empolgado', 'hype_urgente'],
+  },
+  {
+    id: 'Jessica',
+    gender: 'female',
+    tone: 'mature_calm',
+    description: 'Madura e calma, vibe consultora especialista.',
+    confirmed: true,
+    intensityProfile: ['comercial_limpo', 'influencer_natural', 'recomendacao_confiavel'],
+  },
+  {
+    id: 'Laura',
+    gender: 'female',
+    tone: 'mature_warm',
+    description: 'Madura e quente, vibe storytelling acolhedora.',
+    confirmed: true,
+    intensityProfile: ['noturna_calma', 'luxo_contemplativo', 'recomendacao_confiavel'],
+  },
 
   // ── 7 vozes masculinas ───────────────────────────────────────────
-  { id: 'Brian',     gender: 'male',   tone: 'warm_friendly',  description: 'Caloroso e amigável, vibe conversa próxima.',    confirmed: true },
-  { id: 'George',    gender: 'male',   tone: 'firm_authority', description: 'Firme e autoritário, vibe especialista.',        confirmed: true },
-  { id: 'Bill',      gender: 'male',   tone: 'deep_mature',    description: 'Profundo e maduro, vibe documentário.',          confirmed: true },
-  { id: 'Will',      gender: 'male',   tone: 'youthful_clear', description: 'Jovem e claro, vibe vlog dinâmico.',             confirmed: true },
-  { id: 'Liam',      gender: 'male',   tone: 'mid_versatile',  description: 'Médio e versátil, vibe conversacional neutra.',  confirmed: true },
-  { id: 'Eric',      gender: 'male',   tone: 'clean_clear',    description: 'Clean e direto, vibe locutor profissional.',     confirmed: true },
-  { id: 'Daniel',    gender: 'male',   tone: 'firm_clear',     description: 'Firme e analítico, vibe instrutor explicativo.', confirmed: true },
+  {
+    id: 'Brian',
+    gender: 'male',
+    tone: 'warm_friendly',
+    description: 'Caloroso e amigável, vibe conversa próxima.',
+    confirmed: true,
+    intensityProfile: ['influencer_natural', 'tiktok_casual', 'iphone_cru', 'amigo_empolgado', 'noturna_calma', 'recomendacao_confiavel'],
+  },
+  {
+    id: 'George',
+    gender: 'male',
+    tone: 'firm_authority',
+    description: 'Firme e autoritário, vibe especialista.',
+    confirmed: true,
+    intensityProfile: ['comercial_limpo'],
+  },
+  {
+    id: 'Bill',
+    gender: 'male',
+    tone: 'deep_mature',
+    description: 'Profundo e maduro, vibe documentário.',
+    confirmed: true,
+    intensityProfile: ['noturna_calma', 'luxo_contemplativo'],
+  },
+  {
+    id: 'Will',
+    gender: 'male',
+    tone: 'youthful_clear',
+    description: 'Jovem e claro, vibe vlog dinâmico.',
+    confirmed: true,
+    intensityProfile: ['tiktok_casual', 'iphone_cru', 'amigo_empolgado', 'hype_urgente'],
+  },
+  {
+    id: 'Liam',
+    gender: 'male',
+    tone: 'mid_versatile',
+    description: 'Médio e versátil, vibe conversacional neutra.',
+    confirmed: true,
+    intensityProfile: ['influencer_natural', 'tiktok_casual', 'recomendacao_confiavel'],
+  },
+  {
+    id: 'Eric',
+    gender: 'male',
+    tone: 'clean_clear',
+    description: 'Clean e direto, vibe locutor profissional.',
+    confirmed: true,
+    intensityProfile: ['comercial_limpo', 'hype_urgente'],
+  },
+  {
+    id: 'Daniel',
+    gender: 'male',
+    tone: 'firm_clear',
+    description: 'Firme e analítico, vibe instrutor explicativo.',
+    confirmed: true,
+    intensityProfile: ['comercial_limpo', 'influencer_natural', 'luxo_contemplativo', 'recomendacao_confiavel'],
+  },
 ];
 
 // ── Mapeamento Estilo → Voz default (FEMININO) ───────────────────────
@@ -169,4 +288,25 @@ export function getAllV3AudioTags() {
     ...ELEVENLABS_V3_AUDIO_TAGS.delivery,
     ...ELEVENLABS_V3_AUDIO_TAGS.nonVerbal,
   ];
+}
+
+// ── Helpers NOVOS (Plano v4) ──────────────────────────────────────────
+
+// Retorna todas as vozes cujo `intensityProfile` contém o intensityId.
+// Útil pro PovWizard destacar vozes recomendadas no Step 9 quando o
+// usuário escolhe uma intensidade.
+// Aceita gender opcional pra filtrar adicional ('female' | 'male').
+export function getVoicesByIntensity(intensityId, gender = null) {
+  return POV_ELEVENLABS_VOICES.filter((v) => {
+    if (!v.intensityProfile?.includes(intensityId)) return false;
+    if (gender && v.gender !== gender) return false;
+    return true;
+  });
+}
+
+// Indica se determinada voz tem a intensidade no seu profile.
+// Atalho semântico pra "essa voz funciona bem nessa intensidade?"
+export function voiceMatchesIntensity(voiceId, intensityId) {
+  const voice = getVoiceById(voiceId);
+  return !!voice?.intensityProfile?.includes(intensityId);
 }
