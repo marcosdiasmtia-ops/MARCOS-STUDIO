@@ -1,33 +1,50 @@
-// api/pov-script.js (v1.1 — Claude Sonnet 4 gera roteiro POV de N takes)
+// api/pov-script.js (v2.0 — Plano v4: formato TikTok falado + intensityId + schema expandido)
+//
+// CHANGELOG v2.0 (12/05/2026 — Plano v4, Sub-lote B):
+//   🆕 Aceita `intensityId` (opcional, só relevante se audioMode='voiced').
+//      Quando fornecido, injeta o speechStyle correspondente no system
+//      prompt — orientando Claude sobre tom/ritmo/energia da fala.
+//      9 intensidades reconhecidas (de POV_INTENSITIES, pov-intensities.js).
+//   🆕 Schema de output EXPANDIDO (com retrocompat completa):
+//      • descriptions: array de 3 com vibes diferentes (descoberta, solução, estética)
+//      • ctaVariants: array de 3 com strategies (direto, engajamento, fomo)
+//      • tagline: frase de posicionamento (5-8 palavras)
+//      • capcut: { hookCapa, headline, popCaptions[5], suggestedComments[3] }
+//      • Mantém `description`, `ctaWritten`, `hashtags`, `script`,
+//        `audioMode`, `voiceId` exatamente como antes (PovOutput atual
+//        continua funcionando sem mudar).
+//   🆕 Prompt do Claude REESCRITO pra produzir roteiro com formato
+//      TikTok falado autêntico (Camada 1 do Plano v4):
+//      • Frases QUEBRADAS em blocos de 4-8 palavras (separadas por '...' ou '—')
+//      • 1-2 reações por take ('mano', 'tipo', 'pera', 'olha isso', 'nossa', 'CARA')
+//      • CAPS em palavras de ênfase (ex: 'isso aqui é MUITO bom')
+//      • Audio tags Eleven v3: 2-4 por take (era 1-2)
+//      • Estrutura intratake (0-2s entrada → 2-7s ação CAPS → 7-10s gancho)
+//      • Texto deve REAGIR/antecipar ao que aparece visualmente
+//      • ZERO frase explicativa estilo "produto possui acabamento premium"
+//   🆕 TYPE_DESCRIPTIONS expandido pra 22 tipos (era 11) — inclui os
+//      11 tipos novos do Plano v4 (close_tatil, caminhando, correndo,
+//      entrando_ambiente, mostrando_amigo, recebendo_produto,
+//      reflexo_espelho, antes_depois, testando_primeira,
+//      pegando_prateleira, tirando_mochila).
+//   🆕 max_tokens aumentado pra 4096 (era 2048) porque o output cresceu.
 //
 // CHANGELOG v1.1 (10/05/2026):
 //   - Fix dimensionamento do voiceText: 8-15 palavras → 25-30 palavras (~8-10s).
-//     Sem esse fix, áudio sempre saía muito mais curto que vídeo (cada take dura 10s).
-//     Combinado com fix do pov-compose-final.js v1.1 (compose com timestamps),
-//     vídeo final agora tem sync perfeito sem cortar duração.
 //
-// Endpoint que gera o ROTEIRO COMPLETO pro vídeo POV — Claude analisa
-// (produto, tipo, cenário, estilo, duração, modo de áudio) e devolve:
+// Endpoint que gera o ROTEIRO COMPLETO + PACOTE PÓS-PRODUÇÃO pro vídeo POV.
+// Claude analisa (produto, tipo, cenário, estilo, duração, modo de áudio,
+// intensidade opcional) e devolve:
 //   - script: array de N takes (cada um com voiceText? + onScreenPhrase? + purpose)
-//   - description: descrição do post TikTok
-//   - hashtags: 6-10 hashtags PT-BR (mix trending + nicho)
-//   - ctaWritten: CTA escrito pro caption
+//   - description + descriptions (3 vibes)
+//   - hashtags: 6-10 hashtags PT-BR
+//   - ctaWritten + ctaVariants (3 strategies)
+//   - tagline (5-8 palavras de posicionamento)
+//   - capcut: pacote pra produção no CapCut (hookCapa, headline, popCaptions, suggestedComments)
 //
 // MODO DE ÁUDIO (decisão crítica que muda o roteiro inteiro):
-//   - 'silent'  → vídeo MUDO (vibe POV TikTok). voiceText sempre null.
-//                 Conteúdo todo nas onScreenPhrases (hook + demo? + CTA).
+//   - 'silent'  → vídeo MUDO. voiceText sempre null. Conteúdo nas onScreenPhrases.
 //   - 'voiced'  → narração off com Eleven v3 + audio tags inline.
-//                 voiceText preenchido em todos os takes. onScreenPhrases
-//                 menores (reforçam pontos-chave, não duplicam o áudio).
-//
-// AUDIO TAGS (só quando audioMode='voiced'):
-//   Eleven v3 aceita tags inline tipo "[excited] Gente!" ou "[whispers] sério..."
-//   Lista válida espelha pov-elevenlabs-voices.js / ELEVENLABS_V3_AUDIO_TAGS.
-//
-// DISTRIBUIÇÃO DE FRASES ON-SCREEN (espelho de pov-durations.js):
-//   - Hook: sempre 1 (take 1)
-//   - Demo: 0-3 (intermediários, varia por duração)
-//   - CTA:  sempre 1 (último take)
 //
 // Espelha o padrão de api/ugc-script.js (validado em produção).
 //
@@ -39,24 +56,34 @@
 //     productPrice?: string,
 //     productOriginalPrice?: string,
 //     categoryId: string,                    // de ugc-categories.js
-//     typeId: string,                        // de pov-types.js
+//     typeId: string,                        // de pov-types.js (22 ids válidos)
 //     scenarioId: string,                    // de pov-scenarios.js
 //     styleId: string,                       // de pov-styles.js
 //     durationId: '20s' | '30s' | '40s' | '60s',
 //     audioMode: 'silent' | 'voiced',
 //     voiceId?: string,                      // só se audioMode='voiced'
+//     intensityId?: string,                  // 🆕 só se audioMode='voiced' (9 ids válidos)
 //     influencer?: { name?, gender? },       // pra contexto
 //     previousScripts?: array,               // não repetir scripts anteriores
 //     trendData?: string,                    // dados de tendências (futuro)
 //   }
 //
 // RESPONSE:
-//   200: { audioMode, voiceId?, script, description, hashtags, ctaWritten, source }
+//   200: {
+//     audioMode, voiceId?, intensityId?,
+//     script: [...],
+//     description, descriptions: [...3],
+//     hashtags: [...],
+//     ctaWritten, ctaVariants: [...3],
+//     tagline,
+//     capcut: { hookCapa, headline, popCaptions: [...5], suggestedComments: [...3] },
+//     source
+//   }
 //   400: { error: <mensagem> }
 //   500: { error: <mensagem> }
 
 // ════════════════════════════════════════════════════════════════════════
-// Constantes (espelho de pov-durations.js)
+// Constantes
 // ════════════════════════════════════════════════════════════════════════
 
 // durationId → { takes, hookCount, demoMin, demoMax, ctaCount }
@@ -80,6 +107,7 @@ const VALID_AUDIO_TAGS = [
 ];
 
 // Descrições curtas pro Claude (pra ele escrever no tom certo do estilo)
+// 8 estilos POV (pov-styles.js — não mudou no Plano v4).
 const STYLE_DESCRIPTIONS = {
   textura_closeup:     'super zoom em fibras/superfície/material — vibe macro observacional',
   design_acabamento:   'ângulo lateral revelando estética — vibe editorial refinada',
@@ -91,19 +119,67 @@ const STYLE_DESCRIPTIONS = {
   revelacao_embalagem: 'caixa abrindo lentamente — vibe unboxing anticipation',
 };
 
+// Descrições curtas dos 22 tipos POV (espelho de pov-types.js Plano v4).
+// Os 11 originais + 11 novos.
 const TYPE_DESCRIPTIONS = {
-  frasco:     'mão segurando frasco/garrafa pelo corpo',
-  pote:       'pote sendo aberto, tampa removida',
-  sapatos:    'sapato exibido na mão',
-  capinha:    'gadget/capinha segurado pela borda',
-  pequeno:    'estojo aberto revelando produto pequeno',
-  cabide:     'roupa pendurada no cabide',
-  pulso:      'produto no pulso (relógio/pulseira/anel)',
-  vestindo:   'produto sendo colocado/vestido',
-  mordida:    'produto sendo mordido/comido/bebido',
-  superficie: 'produto estático em superfície (sem mãos)',
-  unboxing:   'caixa sendo aberta, produto revelado',
+  // 🤲 HANDHELD (6)
+  frasco:               'mão segurando frasco/garrafa pelo corpo',
+  pote:                 'pote sendo aberto, tampa removida',
+  sapatos:              'sapato exibido na mão',
+  capinha:              'gadget/capinha segurado pela borda',
+  pequeno:              'estojo aberto revelando produto pequeno',
+  close_tatil:          'mão apertando/comprimindo textura do produto (close-up extremo)',
+  // 👔 WORN (3)
+  cabide:               'roupa pendurada no cabide',
+  pulso:                'produto no pulso (relógio/pulseira/anel)',
+  vestindo:             'produto sendo colocado/vestido',
+  // 🍽 ORAL (1)
+  mordida:              'produto sendo mordido/comido/bebido',
+  // 🎁 SPECIAL (2)
+  superficie:           'produto estático em superfície (sem mãos)',
+  unboxing:             'caixa sendo aberta, produto revelado',
+  // 🚶 MOVEMENT (3)
+  caminhando:           'pessoa andando com produto na mão (street style)',
+  correndo:             'pessoa em movimento atlético com produto visível',
+  entrando_ambiente:    'pessoa entrando em ambiente carregando o produto',
+  // 👋 SOCIAL (2)
+  mostrando_amigo:      'mostrando o produto pra outra pessoa que reage',
+  recebendo_produto:    'recebendo o produto de outra pessoa (presente/handoff)',
+  // 🎬 CINEMATIC (1)
+  reflexo_espelho:      'produto aparece pelo reflexo num espelho',
+  // 📖 STORYTELLING (2)
+  antes_depois:         '2 takes mostrando transformação com o produto',
+  testando_primeira:    'primeira experiência sensorial com o produto',
+  // 🛒 SHOPPING (2)
+  pegando_prateleira:   'mão pegando produto numa prateleira/loja',
+  tirando_mochila:      'mão tirando produto de bolsa/mochila',
 };
+
+// 🆕 Intensidades de voz (9 níveis — espelho de pov-intensities.js).
+// Cada chave mapeia pra um speechStyle em inglês que orienta Claude
+// sobre o tom/ritmo/energia da fala. Só relevante se audioMode='voiced'.
+const INTENSITY_SPEECH_STYLES = {
+  comercial_limpo:
+    'Polished commercial voice-over delivery with controlled pacing, neutral confident emotion, crisp articulation, broadcast quality. Smooth even cadence, no slang or hesitation, no reactions or filler words. The voice should feel like a professional ad spot.',
+  influencer_natural:
+    'Polished influencer delivery with warm friendly energy, careful articulation, controlled enthusiasm, conversational but produced. Some natural inflection on key words, occasional smile in the voice, no rough edges or sudden volume jumps. The voice should feel like a top creator on a sponsored post.',
+  tiktok_casual:
+    'Real creator TikTok delivery: conversational and casual, broken sentences with natural pauses, occasional small reactions like "olha", "tipo", "mano", words emphasized naturally without screaming, energetic but not overproduced. The voice should feel like a real TikTok creator on a non-sponsored post talking to friends.',
+  iphone_cru:
+    'Spontaneous home-iPhone delivery: unrehearsed first-take feel, light verbal stumbling, mid-sentence corrections, genuine in-the-moment reactions ("nossa", "pera", "espera"), variable volume as if moving the phone around, candid moment vibe with zero polish. The voice should feel like someone recording on their phone without thinking.',
+  amigo_empolgado:
+    'Enthusiastic-friend delivery: high energy excitement, lots of words in CAPS for emphasis ("CARA", "OLHA ISSO", "GENTE"), quick reactive pace, natural laughs and gasps sprinkled in, infectious sharing-a-discovery vibe. The voice should feel like a friend who just found something amazing and is texting you to come see.',
+  noturna_calma:
+    'Calm-night-routine delivery: soft low volume close to a whisper, slow contemplative pacing with deliberate pauses, intimate close-to-microphone feel, occasional small sighs of contentment, ASMR-adjacent texture. The voice should feel like winding down at the end of the day, low-energy and self-care focused.',
+  luxo_contemplativo:
+    'Luxury-contemplative delivery: refined sophisticated pacing with deliberate dramatic pauses between phrases, premium magazine voice-over quality, low-mid volume with rich tonal depth, selective vocabulary, observational reverence for the product. The voice should feel like a high-end editorial narrating an object of desire.',
+  hype_urgente:
+    'Hype-urgency delivery: fast rapid pace, urgent shouting energy on key phrases ("VAI ACABAR", "CORRE", "ÚLTIMA UNIDADE"), short staccato phrases, FOMO pressure with breath-skipping rhythm, viral drop atmosphere. The voice should feel like a streetwear drop reveal — urgent, exclusive, time-pressured.',
+  recomendacao_confiavel:
+    'Trusted-recommendation delivery: honest balanced tone, measured confident pacing, conversational "I tested this and here is what I think" vibe, occasional softer reflective moments showing genuine thought, friend-giving-honest-advice atmosphere. The voice should feel like a knowledgeable friend who would not recommend something they did not actually use.',
+};
+
+const VALID_INTENSITY_IDS = Object.keys(INTENSITY_SPEECH_STYLES);
 
 // ════════════════════════════════════════════════════════════════════════
 // Handler
@@ -132,6 +208,7 @@ export default async function handler(req, res) {
       durationId,
       audioMode = 'silent',
       voiceId = null,
+      intensityId = null,  // 🆕 Plano v4
       influencer = {},
       previousScripts = [],
       trendData = '',
@@ -151,6 +228,16 @@ export default async function handler(req, res) {
     if (audioMode === 'voiced' && !voiceId) {
       return res.status(400).json({ error: 'voiceId is required when audioMode="voiced"' });
     }
+    // intensityId: validação leve. Se fornecido e inválido, ignora silenciosamente
+    // (não quebra) — comportamento equivalente ao "sem intensidade". Loga warning.
+    let finalIntensityId = null;
+    if (audioMode === 'voiced' && intensityId) {
+      if (VALID_INTENSITY_IDS.includes(intensityId)) {
+        finalIntensityId = intensityId;
+      } else {
+        console.warn(`[pov-script v2.0] Invalid intensityId "${intensityId}" — ignored (using default voice tone).`);
+      }
+    }
 
     const config = DURATION_CONFIG[durationId];
     const totalTakes = config.takes;
@@ -160,6 +247,13 @@ export default async function handler(req, res) {
     // ── Monta prompt ─────────────────────────────────────────────────
     const audioTagsList = audioMode === 'voiced'
       ? `\nAUDIO TAGS DISPONÍVEIS (Eleven v3) — use embutido em voiceText: ${VALID_AUDIO_TAGS.map(t => `[${t}]`).join(', ')}`
+      : '';
+
+    // 🆕 Bloco de intensidade — só se voiced + intensityId válido.
+    const intensityBlock = finalIntensityId
+      ? `\n\nINTENSIDADE DE FALA (Plano v4): ${finalIntensityId}
+${INTENSITY_SPEECH_STYLES[finalIntensityId]}
+→ O voiceText deve seguir EXATAMENTE essa vibe. Audio tags, ritmo e CAPS devem refletir essa intensidade.`
       : '';
 
     const audioModeBlock = audioMode === 'silent'
@@ -176,12 +270,30 @@ export default async function handler(req, res) {
 - voiceText DEVE estar PREENCHIDO em TODOS os ${totalTakes} takes
 - Cada voiceText: ~25-30 palavras (≈8-10s de fala natural em PT-BR coloquial pra preencher o take de 10s)
   IMPORTANTE: cada take dura 10 segundos. Texto muito curto deixa silêncio sobrando.
-  Tom: pessoal, autêntico, vibe TikTok (não comercial robótico).
-- USE 1-2 audio tags por voiceText pra dar emoção (ex: "[excited] Gente, olha isso!", "[whispers] sério, viu...")
+
+🎤 FORMATO TIKTOK FALADO (regras OBRIGATÓRIAS — Plano v4):
+- Frases QUEBRADAS em blocos de 4-8 palavras (separadas por "..." ou "—")
+  ✅ "Cara... olha isso aqui — isso é MUITO bom... sério"
+  ❌ "Olá pessoal, hoje vamos falar sobre um produto incrível que vai mudar sua vida"
+- 1-2 REAÇÕES por take ("mano", "tipo", "pera", "olha isso", "nossa", "CARA", "gente")
+- CAPS em palavras de ÊNFASE (não shouting o tempo todo — só na palavra-chave)
+  ✅ "isso aqui é MUITO bom"
+  ✅ "VAI ACABAR rápido"
+  ❌ "ISSO AQUI É MUITO BOM" (CAPS demais)
+- 2-4 audio tags POR voiceText (era 1-2 — agora MAIS)
+  ✅ "[gasps] [excited] Olha isso, gente! [softly] sério, viu... [confident] dá uma olhada"
+- Estrutura INTRATAKE (cada take de 10s):
+  * 0-2s: entrada/hesitação ("eita", "olha", "pera aí")
+  * 2-7s: ação CAPS (palavra-chave do produto/benefício)
+  * 7-10s: gancho pro próximo take ("agora vem o melhor", "mas espera")
+- Texto deve REAGIR ao que aparece visualmente. Antecipa, comenta, reage.
+- ❌ ZERO frase explicativa formal estilo "produto possui acabamento premium",
+     "este item oferece", "vamos analisar". É CONVERSA, não anúncio.
+
 - onScreenPhrases COMPLEMENTAM o áudio (não duplicam):
   * Hook: 1 frase no take 1 (gancho visual curto)
   * Demo: 0-${config.demoMax} frase(s) opcionais nos intermediários (ponto-chave reforçado)
-  * CTA: 1 frase no último take${audioTagsList}`;
+  * CTA: 1 frase no último take${audioTagsList}${intensityBlock}`;
 
     const previousScriptsBlock = previousScripts.length > 0
       ? `\n\nVÍDEOS ANTERIORES DESTE PRODUTO (NÃO repita o tom/conteúdo):\n${previousScripts.slice(0, 3).map((s, i) => `${i + 1}. ${typeof s === 'string' ? s : JSON.stringify(s).substring(0, 200)}`).join('\n')}`
@@ -195,7 +307,9 @@ export default async function handler(req, res) {
 
     const systemPrompt = `Você é um copywriter especialista em vídeos UGC POV pra TikTok Shop em PT-BR.
 
-MISSÃO: gerar o roteiro COMPLETO de um vídeo POV de afiliação. POV = vídeo curto onde aparecem só as mãos interagindo com o produto (sem rosto). Vibe TikTok autêntica, NUNCA propaganda formal.
+MISSÃO: gerar o roteiro COMPLETO + PACOTE PÓS-PRODUÇÃO de um vídeo POV de afiliação.
+POV = vídeo curto onde aparecem só as mãos interagindo com o produto (sem rosto).
+Vibe TikTok autêntica, NUNCA propaganda formal.
 
 TIPO POV: ${typeDesc}
 ESTILO DE CÂMERA: ${styleDesc}
@@ -209,34 +323,75 @@ REGRAS DE CONTEÚDO (válidas pros 2 modos):
 3. Cada take tem um propósito claro: hook | demo | cta
 4. CTA NUNCA usa "compre agora" puro — varia entre "link no perfil", "tá no carrinho", "achadinho", "compra essa"
 5. Hashtags: 6-10, mix trending BR + nicho do produto. Inclui ao menos 1 trending genérica (#tiktokshop, #achadinho, #queroum)
-6. Description: 1-2 frases que fazem sentido no caption do TikTok, com 1 emoji
-7. ZERO menção ao influencer pelo nome no roteiro (POV é sobre o produto, não a pessoa)
+6. ZERO menção ao influencer pelo nome no roteiro (POV é sobre o produto, não a pessoa)
+
+🆕 PACOTE PÓS-PRODUÇÃO (Plano v4) — gerar TUDO abaixo além do script:
+
+A) descriptions (array de 3 com vibes diferentes — Marcos escolhe qual usar):
+   • { vibe: "descoberta", text: "..." } — vibe "achei algo novo", surpresa, curiosidade
+   • { vibe: "solucao",    text: "..." } — vibe "isso resolve o problema X", utilidade
+   • { vibe: "estetica",   text: "..." } — vibe "isso é lindo", visual/sensorial
+   Cada description: 1-2 frases, com 1-2 emojis, prontas pra usar no caption do TikTok.
+
+B) ctaVariants (array de 3 com strategies diferentes):
+   • { strategy: "direto",       text: "..." } — chamada direta tipo "Link no perfil"
+   • { strategy: "engajamento",  text: "..." } — conversacional tipo "Tô na bio se quiser uma 💕"
+   • { strategy: "fomo",         text: "..." } — urgência tipo "Some rápido — corre"
+
+C) tagline: frase de POSICIONAMENTO do produto em 5-8 palavras (não é CTA).
+   Ex: "O perfume que todo mundo nota", "A poção do soninho perfeito".
+
+D) capcut (pacote pra produção no CapCut):
+   • hookCapa: 3-5 palavras pra abrir o vídeo (vibe "STOP" + curiosidade)
+     Ex: "Cadê isso na sua bag", "Olha isso pelamor"
+   • headline: título do vídeo em 6-10 palavras (mais explicativo que hookCapa)
+     Ex: "Achei o perfume que ninguém esquece", "Skincare que mudou minha pele em 7 dias"
+   • popCaptions: array de EXATAMENTE 5 short captions/stickers pra colar no vídeo
+     Ex: ["wait", "ATÉ QUE FIM", "olha isso 👀", "loucura", "vai por mim"]
+   • suggestedComments: array de EXATAMENTE 3 comentários sugeridos pra Marcos
+     postar como primeira interação (comment seeding)
+     Ex: ["preciso disso", "linkkkkk", "já comprei o meu 👏"]
 
 RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
 {
-  "audioMode": "${audioMode}",${audioMode === 'voiced' ? `\n  "voiceId": "${voiceId}",` : ''}
+  "audioMode": "${audioMode}",${audioMode === 'voiced' ? `\n  "voiceId": "${voiceId}",` : ''}${finalIntensityId ? `\n  "intensityId": "${finalIntensityId}",` : ''}
   "script": [
     ${Array.from({ length: totalTakes }, (_, i) => `{
       "takeNumber": ${i + 1},
       "purpose": "${i === 0 ? 'hook' : i === totalTakes - 1 ? 'cta' : 'demo'}",
-      "voiceText": ${audioMode === 'voiced' ? '"string com 1-2 audio tags inline"' : 'null'},
+      "voiceText": ${audioMode === 'voiced' ? '"string com frases quebradas + CAPS + 2-4 audio tags inline"' : 'null'},
       "onScreenPhrase": "string OU null se não houver"
     }`).join(',\n    ')}
   ],
-  "description": "string descrição TikTok 1-2 frases + 1 emoji",
-  "hashtags": ["#tag1", "#tag2", ...],
-  "ctaWritten": "string CTA pro caption"
+  "descriptions": [
+    { "vibe": "descoberta", "text": "..." },
+    { "vibe": "solucao",    "text": "..." },
+    { "vibe": "estetica",   "text": "..." }
+  ],
+  "hashtags": ["#tag1", "#tag2", "..."],
+  "ctaVariants": [
+    { "strategy": "direto",      "text": "..." },
+    { "strategy": "engajamento", "text": "..." },
+    { "strategy": "fomo",        "text": "..." }
+  ],
+  "tagline": "5-8 palavras de posicionamento",
+  "capcut": {
+    "hookCapa": "3-5 palavras abertura",
+    "headline": "6-10 palavras título",
+    "popCaptions": ["...", "...", "...", "...", "..."],
+    "suggestedComments": ["...", "...", "..."]
+  }
 }`;
 
     const userText = `Produto: ${productName}${productDescription ? `\nDescrição: ${productDescription}` : ''}${priceBlock}${categoryId ? `\nCategoria: ${categoryId}` : ''}
 Influencer: ${influencer.gender || 'female'}${previousScriptsBlock}${trendBlock}
 
-Gera o roteiro do POV. Retorne APENAS o JSON.`;
+Gera o roteiro completo do POV + pacote pós-produção. Retorne APENAS o JSON.`;
 
     // ── Chamada Claude ───────────────────────────────────────────────
     const body = {
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
+      max_tokens: 4096,  // 🆕 era 2048 — schema cresceu (descriptions, ctaVariants, tagline, capcut)
       system: systemPrompt,
       messages: [{ role: 'user', content: userText }],
     };
@@ -253,7 +408,7 @@ Gera o roteiro do POV. Retorne APENAS o JSON.`;
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`[pov-script v1.0] Anthropic error ${response.status}:`, errText.substring(0, 300));
+      console.error(`[pov-script v2.0] Anthropic error ${response.status}:`, errText.substring(0, 300));
       return res.status(response.status).json({
         error: `Anthropic error: ${response.status}`,
         details: errText.substring(0, 300),
@@ -268,7 +423,7 @@ Gera o roteiro do POV. Retorne APENAS o JSON.`;
     try {
       parsed = JSON.parse(clean);
     } catch (e) {
-      console.error('[pov-script v1.0] JSON parse error:', e.message, 'Raw:', clean.substring(0, 500));
+      console.error('[pov-script v2.0] JSON parse error:', e.message, 'Raw:', clean.substring(0, 500));
       return res.status(500).json({
         error: 'Failed to parse Claude response as JSON',
         raw: clean.substring(0, 500),
@@ -276,14 +431,14 @@ Gera o roteiro do POV. Retorne APENAS o JSON.`;
     }
 
     // ── Validação estrutural do output ───────────────────────────────
-    const result = sanitizeAndValidate(parsed, audioMode, voiceId, totalTakes);
+    const result = sanitizeAndValidate(parsed, audioMode, voiceId, finalIntensityId, totalTakes);
 
     if (result.errors.length > 0) {
-      console.warn(`[pov-script v1.0] Validation warnings: ${result.errors.join(', ')}`);
+      console.warn(`[pov-script v2.0] Validation warnings: ${result.errors.join(', ')}`);
     }
 
     console.log(
-      `[pov-script v1.0] OK: product="${productName.substring(0, 40)}", takes=${totalTakes}, mode=${audioMode}, hashtags=${result.script.hashtags.length}`
+      `[pov-script v2.0] OK: product="${productName.substring(0, 40)}", takes=${totalTakes}, mode=${audioMode}${finalIntensityId ? `, intensity=${finalIntensityId}` : ''}, hashtags=${result.script.hashtags.length}, descs=${result.script.descriptions.length}, ctas=${result.script.ctaVariants.length}`
     );
 
     return res.status(200).json({
@@ -292,7 +447,7 @@ Gera o roteiro do POV. Retorne APENAS o JSON.`;
       validationWarnings: result.errors.length > 0 ? result.errors : undefined,
     });
   } catch (error) {
-    console.error('[pov-script v1.0] Error:', error);
+    console.error('[pov-script v2.0] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
@@ -300,19 +455,24 @@ Gera o roteiro do POV. Retorne APENAS o JSON.`;
 // ════════════════════════════════════════════════════════════════════════
 // Sanitização + validação do output do Claude
 // ════════════════════════════════════════════════════════════════════════
+//
+// Plano v4: schema expandido com fallbacks robustos. O frontend antigo
+// (PovOutput.jsx pré-C2) consome só `description`, `hashtags`, `ctaWritten`,
+// `script`. O frontend novo (PovOutput.jsx pós-C2) consome também
+// `descriptions`, `ctaVariants`, `tagline`, `capcut`.
+// Esta função garante que AMBOS recebam dados válidos.
 
-function sanitizeAndValidate(parsed, audioMode, voiceId, totalTakes) {
+function sanitizeAndValidate(parsed, audioMode, voiceId, intensityId, totalTakes) {
   const errors = [];
 
-  // audioMode
+  // ── audioMode ────────────────────────────────────────────────────
   const finalAudioMode = parsed.audioMode === audioMode ? audioMode : audioMode;
   if (parsed.audioMode !== audioMode) errors.push(`audioMode mismatch (got "${parsed.audioMode}")`);
 
-  // script
+  // ── script ──────────────────────────────────────────────────────
   let script = Array.isArray(parsed.script) ? parsed.script : [];
   if (script.length !== totalTakes) {
     errors.push(`script length ${script.length} != expected ${totalTakes}`);
-    // Normaliza pra totalTakes (preenche faltantes com placeholder, corta sobrantes)
     while (script.length < totalTakes) {
       script.push({
         takeNumber: script.length + 1,
@@ -357,36 +517,144 @@ function sanitizeAndValidate(parsed, audioMode, voiceId, totalTakes) {
     errors.push(`take ${totalTakes} (cta) missing onScreenPhrase, used placeholder`);
   }
 
-  // description
-  let description = typeof parsed.description === 'string' ? parsed.description.trim() : '';
-  if (!description) {
-    description = 'Achadinho que você precisa conhecer 💕';
-    errors.push('missing description, used placeholder');
+  // ── descriptions (Plano v4 — array de 3) ─────────────────────────
+  const VALID_VIBES = ['descoberta', 'solucao', 'estetica'];
+  let descriptions = Array.isArray(parsed.descriptions) ? parsed.descriptions : [];
+  descriptions = descriptions
+    .filter((d) => d && typeof d === 'object' && typeof d.text === 'string' && d.text.trim() !== '')
+    .map((d) => ({
+      vibe: VALID_VIBES.includes(d.vibe) ? d.vibe : 'descoberta',
+      text: d.text.trim(),
+    }));
+
+  // Fallback: se vier apenas `description` (string), criar 1 entry
+  if (descriptions.length === 0 && typeof parsed.description === 'string' && parsed.description.trim()) {
+    descriptions.push({ vibe: 'descoberta', text: parsed.description.trim() });
+    errors.push('descriptions absent, derived 1 from legacy description field');
   }
 
-  // hashtags
-  let hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.filter(h => typeof h === 'string') : [];
-  hashtags = hashtags.map(h => h.trim().startsWith('#') ? h.trim() : `#${h.trim()}`);
+  // Garante mínimo de 3 — preenche com placeholders se faltar
+  const placeholderTexts = {
+    descoberta: 'Achadinho que você precisa conhecer 💕',
+    solucao:    'Resolve um problema que eu nem sabia que tinha 🙌',
+    estetica:   'Lindo demais — vibe perfeita ✨',
+  };
+  VALID_VIBES.forEach((v) => {
+    if (!descriptions.some((d) => d.vibe === v)) {
+      descriptions.push({ vibe: v, text: placeholderTexts[v] });
+      errors.push(`descriptions[${v}] missing, used placeholder`);
+    }
+  });
+  descriptions = descriptions.slice(0, 3);
+
+  // Legacy: description singular = descriptions[0].text
+  const description = descriptions[0].text;
+
+  // ── hashtags ─────────────────────────────────────────────────────
+  let hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.filter((h) => typeof h === 'string') : [];
+  hashtags = hashtags.map((h) => h.trim().startsWith('#') ? h.trim() : `#${h.trim()}`);
   if (hashtags.length < 3) {
-    hashtags = [...hashtags, '#tiktokshop', '#achadinho', '#queroum'].slice(0, 3);
+    hashtags = [...hashtags, '#tiktokshop', '#achadinho', '#queroum'].slice(0, Math.max(3, hashtags.length + 3));
     errors.push('hashtags too few, padded with defaults');
   }
 
-  // ctaWritten
-  let ctaWritten = typeof parsed.ctaWritten === 'string' ? parsed.ctaWritten.trim() : '';
-  if (!ctaWritten) {
-    ctaWritten = '🛒 Link no perfil';
-    errors.push('missing ctaWritten, used placeholder');
+  // ── ctaVariants (Plano v4 — array de 3) ──────────────────────────
+  const VALID_STRATEGIES = ['direto', 'engajamento', 'fomo'];
+  let ctaVariants = Array.isArray(parsed.ctaVariants) ? parsed.ctaVariants : [];
+  ctaVariants = ctaVariants
+    .filter((c) => c && typeof c === 'object' && typeof c.text === 'string' && c.text.trim() !== '')
+    .map((c) => ({
+      strategy: VALID_STRATEGIES.includes(c.strategy) ? c.strategy : 'direto',
+      text: c.text.trim(),
+    }));
+
+  // Fallback: se vier apenas `ctaWritten` (string), criar 1 entry
+  if (ctaVariants.length === 0 && typeof parsed.ctaWritten === 'string' && parsed.ctaWritten.trim()) {
+    ctaVariants.push({ strategy: 'direto', text: parsed.ctaWritten.trim() });
+    errors.push('ctaVariants absent, derived 1 from legacy ctaWritten field');
   }
 
+  // Garante mínimo de 3 — preenche com placeholders se faltar
+  const placeholderCtas = {
+    direto:      '🛒 Link no perfil',
+    engajamento: 'Tô na bio se quiser uma 💕',
+    fomo:        'Some rápido — corre 🏃‍♀️',
+  };
+  VALID_STRATEGIES.forEach((s) => {
+    if (!ctaVariants.some((c) => c.strategy === s)) {
+      ctaVariants.push({ strategy: s, text: placeholderCtas[s] });
+      errors.push(`ctaVariants[${s}] missing, used placeholder`);
+    }
+  });
+  ctaVariants = ctaVariants.slice(0, 3);
+
+  // Legacy: ctaWritten = ctaVariants[0].text
+  const ctaWritten = ctaVariants[0].text;
+
+  // ── tagline (Plano v4) ───────────────────────────────────────────
+  let tagline = typeof parsed.tagline === 'string' ? parsed.tagline.trim() : '';
+  if (!tagline) {
+    tagline = 'O achadinho que faz diferença';
+    errors.push('tagline missing, used placeholder');
+  }
+
+  // ── capcut (Plano v4) ────────────────────────────────────────────
+  const capcutInput = (parsed.capcut && typeof parsed.capcut === 'object') ? parsed.capcut : {};
+
+  let hookCapa = typeof capcutInput.hookCapa === 'string' ? capcutInput.hookCapa.trim() : '';
+  if (!hookCapa) {
+    hookCapa = 'Olha isso 👀';
+    errors.push('capcut.hookCapa missing, used placeholder');
+  }
+
+  let headline = typeof capcutInput.headline === 'string' ? capcutInput.headline.trim() : '';
+  if (!headline) {
+    headline = 'O achadinho que mudou meu dia';
+    errors.push('capcut.headline missing, used placeholder');
+  }
+
+  let popCaptions = Array.isArray(capcutInput.popCaptions)
+    ? capcutInput.popCaptions.filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim())
+    : [];
+  const defaultPopCaptions = ['wait', 'olha isso 👀', 'preciso disso', 'até que fim', 'vai por mim'];
+  while (popCaptions.length < 5) {
+    popCaptions.push(defaultPopCaptions[popCaptions.length] || 'olha 👀');
+  }
+  popCaptions = popCaptions.slice(0, 5);
+  if (parsed.capcut?.popCaptions?.length !== 5) {
+    errors.push(`capcut.popCaptions length ${parsed.capcut?.popCaptions?.length ?? 0} != 5 (padded/trimmed)`);
+  }
+
+  let suggestedComments = Array.isArray(capcutInput.suggestedComments)
+    ? capcutInput.suggestedComments.filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim())
+    : [];
+  const defaultComments = ['preciso disso', 'linkkkkk', 'já comprei o meu 👏'];
+  while (suggestedComments.length < 3) {
+    suggestedComments.push(defaultComments[suggestedComments.length] || 'gostei');
+  }
+  suggestedComments = suggestedComments.slice(0, 3);
+  if (parsed.capcut?.suggestedComments?.length !== 3) {
+    errors.push(`capcut.suggestedComments length ${parsed.capcut?.suggestedComments?.length ?? 0} != 3 (padded/trimmed)`);
+  }
+
+  const capcut = { hookCapa, headline, popCaptions, suggestedComments };
+
+  // ── Output final ─────────────────────────────────────────────────
   const out = {
     audioMode: finalAudioMode,
     script,
+    // Novos (Plano v4)
+    descriptions,
+    ctaVariants,
+    tagline,
+    capcut,
+    // Legacy (retrocompat com PovOutput.jsx pré-C2)
     description,
-    hashtags,
     ctaWritten,
+    hashtags,
   };
   if (audioMode === 'voiced') out.voiceId = voiceId;
+  if (intensityId) out.intensityId = intensityId;
 
   return { script: out, errors };
 }
