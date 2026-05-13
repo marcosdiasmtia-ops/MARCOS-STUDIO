@@ -1,7 +1,31 @@
-// api/pov-image-base.js (v1.0 — Nano Banana Pro gera imagem-base de 1 take POV)
+// api/pov-image-base.js (v2.0 — Plano v4: aceita seed opcional pra consistência visual entre takes)
+//
+// CHANGELOG v2.0 (12/05/2026 — Plano v4, Sub-lote B):
+//   🆕 Aceita `seed` opcional no body (number inteiro).
+//      Quando fornecido, é passado pro Nano Banana Pro Edit no payload.
+//      Como o modelo aceita seed, isso permite que o frontend envie
+//      O MESMO seed pra todas as N chamadas paralelas de
+//      `generatePovImageBase` — garantindo consistência visual entre
+//      takes (mesma paleta de cor, mesma iluminação, mesma estética).
+//
+//      Padrão de uso recomendado no frontend (PovOutput.jsx):
+//          const sharedSeed = Math.floor(Math.random() * 1e9);
+//          await Promise.all(takes.map((t) =>
+//            generatePovImageBase({ ..., seed: sharedSeed })
+//          ));
+//
+//      Solução C do Plano v4 (fidelidade visual). Combinada com:
+//        • Solução A (refator buildImagePrompt em PovOutput) — Sub-lote C2
+//        • Solução B (prefixo fidelidade em pov-kling-prompts) — Sub-lote B (já deployed)
+//
+//      Validação leve: seed inválido (não-número ou fora do range int)
+//      vira warning e é ignorado — não bloqueia a geração.
+//
+// CHANGELOG v1.0:
+//   Endpoint ATÔMICO inicial — gera 1 imagem por chamada.
 //
 // Endpoint ATÔMICO que gera UMA imagem-base pra UM take POV. Essa imagem
-// é o `start_image_url` que vai pro Kling 2.6 Pro animar (Sessão 2 Lote C).
+// é o `start_image_url` que vai pro Kling 2.6 Pro animar.
 //
 // É atômico (não faz N takes numa só chamada) por causa do timeout do Vercel:
 // Nano Banana leva 20-40s por imagem; gerar 6 takes (POV de 60s) num único
@@ -12,9 +36,9 @@
 //   1. pov-script.js          → roteiro PT-BR com N takes
 //   2. pov-kling-prompts.js   → N prompts em inglês
 //   3. pov-image-base (ESTE)  → N imagens-base (chamado N vezes pelo frontend)
-//   4. pov-kling-generate.js  → N vídeos de 10s (Lote C)
+//   4. pov-kling-generate.js  → N vídeos de 10s
 //   5. pov-elevenlabs-tts.js  → N áudios de fala (se voiced)
-//   6. pov-compose-final.js   → vídeo final concat (Lote C)
+//   6. pov-compose-final.js   → vídeo final concat com timestamps
 //
 // Espelha o padrão de api/ugc-image-base.js (validado em produção):
 //   - Modelo: fal-ai/nano-banana-pro/edit (suporta 2 imagens + prompt)
@@ -35,6 +59,11 @@
 //                                       // (ver pov-kling-prompts.js mas ADAPTADO
 //                                       // pra IMAGEM ESTÁTICA, não vídeo).
 //     takeNumber?: number,             // só pra log (1, 2, 3...)
+//     seed?: number,                   // 🆕 Plano v4 — opcional, integer.
+//                                       // Quando fornecido, passado pro Nano Banana Pro
+//                                       // pra reproducibilidade entre takes. Recomendado
+//                                       // usar o MESMO seed em todas as N chamadas
+//                                       // paralelas do mesmo POV.
 //   }
 //
 // RESPONSE:
@@ -61,6 +90,7 @@ export default async function handler(req, res) {
       handsReferenceUrl = null,
       prompt,
       takeNumber = null,
+      seed = null,  // 🆕 Plano v4 — opcional
     } = req.body || {};
 
     // ── Validação ────────────────────────────────────────────────────
@@ -69,6 +99,17 @@ export default async function handler(req, res) {
     }
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 50) {
       return res.status(400).json({ error: 'prompt is required (min 50 chars)' });
+    }
+
+    // 🆕 Validação leve do seed — inválido vira warning, não erro 400
+    let finalSeed = null;
+    if (seed !== null && seed !== undefined) {
+      const s = Number(seed);
+      if (Number.isFinite(s) && Number.isInteger(s) && s >= 0 && s <= Number.MAX_SAFE_INTEGER) {
+        finalSeed = s;
+      } else {
+        console.warn(`[pov-image-base${takeNumber ? ` t${takeNumber}` : ''}] Invalid seed "${seed}" — ignored (expected non-negative integer).`);
+      }
     }
 
     // ── Validação ESTRUTURAL do prompt POV (não bloqueia, só avisa) ──
@@ -99,6 +140,11 @@ export default async function handler(req, res) {
       num_images: 1,
       output_format: 'png',
     };
+    // 🆕 Plano v4 — injeta seed apenas se válido. Quando não fornecido,
+    // Nano Banana Pro usa seed aleatório (comportamento default v1.0).
+    if (finalSeed !== null) {
+      body.seed = finalSeed;
+    }
 
     const logPrefix = `[pov-image-base${takeNumber ? ` t${takeNumber}` : ''}]`;
 
@@ -106,6 +152,7 @@ export default async function handler(req, res) {
       `${logPrefix} Submitting to Nano Banana Pro Edit:`,
       `prompt_chars=${prompt.length},`,
       `imgs=${imageUrls.length},`,
+      `seed=${finalSeed !== null ? finalSeed : '(random)'},`,
       `product=${productPhotoUrl.substring(0, 60)}...,`,
       `hands=${handsReferenceUrl ? handsReferenceUrl.substring(0, 60) + '...' : '(none)'}`
     );
@@ -136,7 +183,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         imageUrl: submitData.images[0].url,
         prompt: prompt,
-        seed: submitData.seed || null,
+        seed: submitData.seed ?? finalSeed,
         requestId: submitData.request_id || null,
         takeNumber,
       });
@@ -192,11 +239,13 @@ export default async function handler(req, res) {
           return res.status(500).json({ error: 'No images returned by Nano Banana Pro', data: result });
         }
 
-        console.log(`${logPrefix} OK: ${requestId} after ${attempts * 2}s`);
+        console.log(`${logPrefix} OK: ${requestId} after ${attempts * 2}s (seed=${result.seed ?? finalSeed ?? 'unknown'})`);
         return res.status(200).json({
           imageUrl: result.images[0].url,
           prompt: prompt,
-          seed: result.seed || null,
+          // Prioridade: seed do fal.ai (autoritativo) > seed que mandamos > null.
+          // Se mandamos seed e o fal.ai aceitou, ele devolve no result.
+          seed: result.seed ?? finalSeed,
           requestId: requestId,
           takeNumber,
         });
