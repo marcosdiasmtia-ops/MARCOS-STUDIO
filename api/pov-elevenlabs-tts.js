@@ -1,9 +1,18 @@
-// api/pov-elevenlabs-tts.js (v1.1 — Eleven v3 gera áudio PT-BR de 1 take POV)
+// api/pov-elevenlabs-tts.js (v1.2 — reverte v1.1: 'pt-BR' rejeitado pelo fal.ai com 422)
+//
+// 🔄 v1.2 (13/05/2026) — REVERSÃO da v1.1.
+//    Tentativa v1.1 de passar 'pt-BR' como language_code foi rejeitada pelo
+//    fal.ai com erro 422 ("Unprocessable Entity"). O campo language_code do
+//    Eleven v3 é ESTRITAMENTE ISO 639-1 (2 letras) e não aceita variantes
+//    regionais como 'pt-BR'. Voltamos pro default 'pt'.
+//    Próxima abordagem (Opção B): forçar sotaque BR via pistas linguísticas
+//    no próprio texto (system prompt do pov-script.js) — não via parâmetro.
 //
 // 🆕 v1.1 (13/05/2026) — Fix sotaque PT-BR: default de languageCode mudou
 //    de 'pt' (genérico, tendia a sotaque europeu) pra 'pt-BR' (IETF BCP 47,
 //    força português brasileiro). Sintoma corrigido: vozes anglo do Eleven v3
 //    (Sarah, Aria, Brian, etc.) saíam com sotaque de Portugal em vez do Brasil.
+//    🔻 REVERTIDA NA v1.2 — fal.ai rejeita 'pt-BR' com 422.
 //
 // Endpoint ATÔMICO que gera UM áudio de fala pra UM take POV (modo 'voiced').
 // O áudio sai como MP3 hospedado no fal.ai, pronto pra mergear com o vídeo
@@ -35,10 +44,10 @@
 //     speed?: number,                  // 0.7-1.2 (default 1.0)
 //     stability?: number,              // 0-1 (default 0.5)
 //     similarityBoost?: number,        // 0-1 (default 0.75)
-//     languageCode?: string,           // IETF BCP 47 (default 'pt-BR' pra
-//                                       // português brasileiro). Foi 'pt' na
-//                                       // v1.0, mas o Eleven v3 tendia a
-//                                       // sotaque europeu — 'pt-BR' força BR.
+//     languageCode?: string,           // ISO 639-1, 2 letras (default 'pt').
+//                                       // ⚠️ NÃO aceita 'pt-BR' — fal.ai
+//                                       // retorna 422. Pra forçar sotaque BR,
+//                                       // ver Opção B (pistas no texto).
 //     takeNumber?: number,             // só pra log
 //   }
 //
@@ -96,7 +105,7 @@ export default async function handler(req, res) {
       speed = 1.0,
       stability = 0.5,
       similarityBoost = 0.75,
-      languageCode = 'pt-BR',
+      languageCode = 'pt',
       takeNumber = null,
     } = req.body || {};
 
