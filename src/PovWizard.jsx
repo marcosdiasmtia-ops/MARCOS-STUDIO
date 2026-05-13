@@ -1,10 +1,42 @@
-// src/PovWizard.jsx (v1.3 — Sub-lote 3c — suporta initialData pra editar config da galeria)
+// src/PovWizard.jsx (v2.0 — Plano v4: Visual do POV expandido + Intensidade Humana + filtragem inteligente)
+//
+// CHANGELOG v2.0 (12/05/2026 — Plano v4, Sub-lote C1):
+//   🆕 Step 6 RENOMEADO "Estilo de câmera" → "Visual do POV". Reformulado
+//      pra agrupar 3 conceitos:
+//        • Câmera (4 estilos atuais — STYLES_CAMERA)
+//        • Interação (4 estilos atuais — STYLES_INTERACTION)
+//        • Nível de Imperfeição (6 níveis NOVO — POV_IMPERFECTIONS)
+//      + checkbox "✨ Naturalidade extra" (NOVO) que se desabilita
+//        automaticamente nos 3 níveis mais crus de imperfeição
+//        (handheld_cru, iphone_caseiro, documentario) com tooltip.
+//   🆕 Step 9 (Voz) ganha categoria "Intensidade Humana" antes da grade
+//      de vozes (só se audioMode='voiced'). 9 níveis de POV_INTENSITIES.
+//      Quando intensityId é escolhida, as vozes ganham filtragem
+//      visual 3 níveis (recomendadas pra intensidade + claude rec + resto).
+//   🆕 AUTO-SUGESTÃO DE INTENSIDADE: quando o user escolhe imperfeição
+//      no Step 6, se ainda não tem intensityId, prerseleciona o default
+//      de IMPERFECTION_TO_INTENSITY_DEFAULT. Pro nível 'documentario'
+//      (que tem null no mapping) prerseleciona DOCUMENTARIO_INTENSITY_OPTIONS[0].
+//   🆕 Step 3 (Tipo) e Step 4 (Cenário) ganham FILTRAGEM VISUAL INTELIGENTE
+//      em 3 níveis (CSS-based, todos clicáveis):
+//        🎯 Claude escolheu → border dourada + glow (1 card)
+//        ✨ Ideal pro contexto → border colorida + badge (3-8 cards)
+//        Restante → opacity 50% normal (clicável, fica claro que existe)
+//      Step 3: "ideal" = tipos do grupo que combina com categoria do produto.
+//      Step 4: "ideal" = TYPE_TO_SCENARIOS_IDEAL[typeId].
+//   🆕 buildWizardData() retorna 3 campos novos:
+//        imperfectionId, naturalExtra, intensityId
+//   🆕 useEffect de initialData pré-popula os 3 novos states.
+//   🆕 handleRecommendDefaults() aceita imperfectionId e intensityId
+//      se Claude devolver. Salva todas as recs num único state
+//      `claudeRecommendations` (consultado pelas filtragens visuais).
+//   🔁 Retrocompat 100%: wizardData salvo na galeria sem os 3 campos
+//      novos continua funcionando (defaults: imperfectionId=null,
+//      naturalExtra=false, intensityId=null).
 //
 // CHANGELOG v1.3 (10/05/2026):
 //   ✅ Aceita prop `initialData` (objeto wizardData salvo na galeria).
 //   ✅ useEffect pré-preenche todos os states quando initialData muda.
-//   ✅ productPhoto NÃO é restaurado (base64 não fica salvo na galeria).
-//      Usuário precisa re-fazer upload da foto na edição.
 //
 // CHANGELOG v1.2 (10/05/2026):
 //   - Wizard completo + botão Step 10 chama onComplete(wizardData)
@@ -12,25 +44,17 @@
 // Wizard principal da aba POV. Coleta todas as decisões do usuário pra gerar
 // um vídeo POV (Point of View) pra TikTok Shop.
 //
-// SUB-LOTE 3b.2 (atual):
+// STEPS:
 //   ✅ Step 1: Influencer
 //   ✅ Step 2: Produto (7 campos)
-//   ✅ Step 3: Tipo de POV (11 opções) + ✨ Claude sugere
-//   ✅ Step 4: Cenário (15 opções em 4 grupos)
+//   ✅ Step 3: Tipo de POV (22 opções em 9 grupos + filtragem 3 níveis)
+//   ✅ Step 4: Cenário (37 opções em 6 grupos + filtragem 3 níveis)
 //   ✅ Step 5: Mãos (toggle Influencer ⟷ Anônima · 11 opções)
-//   ✅ Step 6: Estilo de câmera (8 opções em 2 categorias)
+//   ✅ Step 6: Visual do POV (4 câmera + 4 interação + 6 imperfeição + naturalidade)
 //   ✅ Step 7: Duração (4 opções com custo dinâmico)
 //   ✅ Step 8: Áudio (Sem voz ⟷ Com voz · com warning experimental)
-//   ✅ Step 9: Voz/Roteiro (auto-selecionada se voiced; modo silent skipa visual)
+//   ✅ Step 9: Voz/Roteiro (9 intensidades + grade de vozes filtrada)
 //   ✅ Step 10: Música (sugestão via callClaude — Comercial + Viral)
-//   ✅ Step 11: REMOVIDO — botão "🎬 Gerar POV" no Step 10 chama onComplete(wizardData)
-//                pra container (PovStudio) trocar pra modo 'output' (PovOutput)
-//
-// MUDANÇA PRINCIPAL DO 3b.2:
-//   - Step 10 vira o último step navegável
-//   - Botão "🎬 Gerar POV" consolida wizardData (extraindo base64 das fotos)
-//     e chama onComplete(wizardData) — sem ir pra step 11 visualmente
-//   - PovStudio recebe wizardData e renderiza PovOutput (que dispara pipeline)
 
 import { useState, useEffect, useMemo } from 'react';
 import {
@@ -41,7 +65,13 @@ import {
 import { POV_TYPES, POV_TYPE_GROUPS } from './data/pov-types';
 import { POV_SCENARIOS, POV_SCENARIO_GROUPS } from './data/pov-scenarios';
 import { POV_HANDS, POV_HANDS_MODES, HANDS_FEMALE, HANDS_MALE, HANDS_SPECIAL } from './data/pov-hands';
-import { POV_STYLES, POV_STYLE_CATEGORIES } from './data/pov-styles';
+import {
+  POV_STYLES,
+  POV_STYLE_CATEGORIES,
+  POV_IMPERFECTIONS,                // 🆕 v2.0
+  NATURALITY_EXTRA_DIRECTIVE,       // 🆕 v2.0 (pra tooltip)
+  imperfectionDisablesNaturality,   // 🆕 v2.0
+} from './data/pov-styles';
 import { POV_DURATIONS } from './data/pov-durations';
 import {
   POV_ELEVENLABS_VOICES,
@@ -49,7 +79,14 @@ import {
   VOICES_MALE,
   VOICE_BY_STYLE_FEMALE,
   VOICE_BY_STYLE_MALE,
+  voiceMatchesIntensity,            // 🆕 v2.0
 } from './data/pov-elevenlabs-voices';
+import { POV_INTENSITIES } from './data/pov-intensities';  // 🆕 v2.0
+import {
+  TYPE_TO_SCENARIOS_IDEAL,             // 🆕 v2.0
+  IMPERFECTION_TO_INTENSITY_DEFAULT,    // 🆕 v2.0
+  DOCUMENTARIO_INTENSITY_OPTIONS,       // 🆕 v2.0
+} from './data/pov-mappings';
 import { UGC_CATEGORIES } from './data/ugc-categories';
 
 const TOTAL_STEPS = 11;
@@ -60,7 +97,7 @@ const STEP_TITLES = [
   'Tipo de POV',         // 3
   'Cenário',             // 4
   'Mãos',                // 5
-  'Estilo de câmera',    // 6
+  'Visual do POV',       // 6 🆕 v2.0 (era 'Estilo de câmera')
   'Duração',             // 7
   'Áudio',               // 8
   'Voz/Roteiro',         // 9
@@ -104,6 +141,10 @@ export default function PovWizard({ onComplete, onSwitchTab, initialData = null 
   // ── Step 6: Estilo de câmera ─────────────────────────────────────────
   const [styleId, setStyleId] = useState(null);
 
+  // 🆕 v2.0 — Step 6: Imperfeição visual (opcional) + Naturalidade extra (opcional)
+  const [imperfectionId, setImperfectionId] = useState(null);
+  const [naturalExtra, setNaturalExtra] = useState(false);
+
   // ── Step 7: Duração ──────────────────────────────────────────────────
   const [durationId, setDurationId] = useState(null);
 
@@ -114,10 +155,18 @@ export default function PovWizard({ onComplete, onSwitchTab, initialData = null 
   // ── Step 9: Voz (só se voiced) ───────────────────────────────────────
   const [voiceId, setVoiceId] = useState(null);
 
+  // 🆕 v2.0 — Step 9: Intensidade humana (só se voiced, opcional)
+  const [intensityId, setIntensityId] = useState(null);
+
   // ── Step 10: Música ──────────────────────────────────────────────────
   const [musicSuggestion, setMusicSuggestion] = useState(null);
   const [musicLoading, setMusicLoading] = useState(false);
   const [musicError, setMusicError] = useState(null);
+
+  // 🆕 v2.0 — Recomendações do Claude (alimenta filtragem visual 3 níveis)
+  // Salvado após handleRecommendDefaults — { typeId, scenarioId, styleId,
+  // handsId, imperfectionId?, intensityId? }
+  const [claudeRecommendations, setClaudeRecommendations] = useState(null);
 
   // ── Carrega influencers do localStorage ───────────────────────────────
   useEffect(() => {
@@ -150,6 +199,10 @@ export default function PovWizard({ onComplete, onSwitchTab, initialData = null 
     }
     if (initialData.voiceId) setVoiceId(initialData.voiceId);
     if (initialData.musicSuggestion) setMusicSuggestion(initialData.musicSuggestion);
+    // 🆕 v2.0 — restaura campos do Plano v4 (todos opcionais — retrocompat 100%)
+    if (initialData.imperfectionId) setImperfectionId(initialData.imperfectionId);
+    if (typeof initialData.naturalExtra === 'boolean') setNaturalExtra(initialData.naturalExtra);
+    if (initialData.intensityId) setIntensityId(initialData.intensityId);
     console.log('[PovWizard] pré-preenchido com initialData');
   }, [initialData]);
 
@@ -186,6 +239,20 @@ export default function PovWizard({ onComplete, onSwitchTab, initialData = null 
       }
     }
   }, [step, audioMode, voiceId, styleId, influencerGender]);
+
+  // 🆕 v2.0 — Auto-sugere intensidade quando user escolhe imperfeição (Plano v4)
+  // Só prerseleciona se intensityId ainda não tem valor (preserva escolha manual).
+  // Pro nível 'documentario' (mapping retorna null), usa o primeiro dos 3 options.
+  useEffect(() => {
+    if (!imperfectionId || intensityId) return;
+    const defaultIntensity = IMPERFECTION_TO_INTENSITY_DEFAULT[imperfectionId];
+    if (defaultIntensity) {
+      setIntensityId(defaultIntensity);
+    } else if (imperfectionId === 'documentario' && DOCUMENTARIO_INTENSITY_OPTIONS?.length > 0) {
+      // documentario abre 3 opções — prerseleciona a 1ª (luxo_contemplativo segundo plano)
+      setIntensityId(DOCUMENTARIO_INTENSITY_OPTIONS[0]);
+    }
+  }, [imperfectionId, intensityId]);
 
   // ── Validação por step ────────────────────────────────────────────────
   function isStepValid(s) {
@@ -289,6 +356,11 @@ export default function PovWizard({ onComplete, onSwitchTab, initialData = null 
       audioMode,
       voiceId: audioMode === 'voiced' ? voiceId : null,
 
+      // 🆕 v2.0 — Plano v4 (todos opcionais)
+      imperfectionId: imperfectionId || null,
+      naturalExtra: naturalExtra === true,
+      intensityId: audioMode === 'voiced' ? (intensityId || null) : null,
+
       // música (do step 10) — opcional
       musicSuggestion: musicSuggestion || null,
     };
@@ -351,19 +423,39 @@ export default function PovWizard({ onComplete, onSwitchTab, initialData = null 
       });
 
       const rec = result.recommendations;
+      // 🆕 v2.0 — Salva todas as recommendations num único objeto pra
+      // alimentar a filtragem visual 3 níveis dos Steps 3, 4, 6, 9.
+      // Inclui imperfectionId/intensityId se Claude devolver (opcional).
+      const validRecs = {};
+
       // Aplica apenas IDs válidos (defesa contra hallucination)
       if (rec.typeId && POV_TYPES.find((t) => t.id === rec.typeId)) {
         setTypeId(rec.typeId);
+        validRecs.typeId = rec.typeId;
       }
       if (rec.scenarioId && POV_SCENARIOS.find((s) => s.id === rec.scenarioId)) {
         setScenarioId(rec.scenarioId);
+        validRecs.scenarioId = rec.scenarioId;
       }
       if (rec.styleId && POV_STYLES.find((s) => s.id === rec.styleId)) {
         setStyleId(rec.styleId);
+        validRecs.styleId = rec.styleId;
       }
       if (rec.handsId && POV_HANDS.find((h) => h.id === rec.handsId)) {
         setHandsId(rec.handsId);
+        validRecs.handsId = rec.handsId;
       }
+      // 🆕 v2.0 — campos novos do Plano v4 (Claude pode passar a devolver no futuro)
+      if (rec.imperfectionId && POV_IMPERFECTIONS.find((i) => i.id === rec.imperfectionId)) {
+        setImperfectionId(rec.imperfectionId);
+        validRecs.imperfectionId = rec.imperfectionId;
+      }
+      if (rec.intensityId && POV_INTENSITIES.find((i) => i.id === rec.intensityId)) {
+        setIntensityId(rec.intensityId);
+        validRecs.intensityId = rec.intensityId;
+      }
+
+      setClaudeRecommendations(validRecs);
 
       console.log('[PovWizard] Claude sugeriu:', rec, '· source:', result.source);
     } catch (err) {
@@ -598,6 +690,26 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
   }
 
   function renderStep3Type() {
+    // 🆕 v2.0 — Heurística "ideal pra categoria do produto" (Plano v4)
+    // Mapeia category group → POV_TYPE_GROUPS que tipicamente funcionam bem.
+    // Pra produtos beauty/perfume, tipos handheld/oral/worn fazem sentido.
+    // Pra fashion, tipos worn/social/shopping. Etc.
+    const CATEGORY_GROUP_TO_TYPE_GROUPS = {
+      beauty:      ['handheld', 'oral', 'worn'],
+      fashion:     ['worn', 'shopping', 'social'],
+      home:        ['handheld', 'special', 'storytelling'],
+      electronics: ['handheld', 'special'],
+      health:      ['handheld', 'oral'],
+      other:       ['handheld', 'special'],
+    };
+    const productCategory = UGC_CATEGORIES.find((c) => c.id === productCategoryId);
+    const idealTypeGroups = productCategory
+      ? (CATEGORY_GROUP_TO_TYPE_GROUPS[productCategory.group] || [])
+      : [];
+    const idealTypeIds = POV_TYPES
+      .filter((t) => idealTypeGroups.includes(t.group))
+      .map((t) => t.id);
+
     return (
       <div className="card">
         <div className="card-header-row">
@@ -627,17 +739,25 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
 
         <p className="hint" style={{ marginBottom: 16 }}>
           Como a mão interage com o produto. Escolha o que combina com a forma física.
+          {productCategoryId && idealTypeIds.length > 0 && (
+            <span style={{ color: 'var(--gr)', display: 'block', marginTop: 4 }}>
+              💡 Destacamos os tipos que combinam mais com <strong>{productCategory.name}</strong>.
+            </span>
+          )}
         </p>
 
         {POV_TYPE_GROUPS.map((group) => {
           const typesOfGroup = POV_TYPES.filter((t) => t.group === group.id);
+          if (typesOfGroup.length === 0) return null;
           return (
-            <GroupedGrid
+            <FilteredGroupedGrid
               key={group.id}
               groupLabel={`${group.emoji} ${group.name}`}
               items={typesOfGroup}
               selectedId={typeId}
               onSelect={setTypeId}
+              claudeRecommendedId={claudeRecommendations?.typeId}
+              idealIds={idealTypeIds}
             />
           );
         })}
@@ -650,23 +770,38 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
   }
 
   function renderStep4Scenario() {
+    // 🆕 v2.0 — Cenários ideais pelo typeId escolhido (Plano v4)
+    // TYPE_TO_SCENARIOS_IDEAL[typeId] retorna lista de IDs em ordem de
+    // preferência. reflexo_espelho tem 'closet_espelhado' como obrigatório
+    // na 1ª posição (M3 do plano).
+    const idealScenarioIds = typeId && TYPE_TO_SCENARIOS_IDEAL[typeId]
+      ? TYPE_TO_SCENARIOS_IDEAL[typeId]
+      : [];
+
     return (
       <div className="card">
         <div className="card-title">Cenário do POV</div>
         <p className="hint" style={{ marginBottom: 16 }}>
           Onde o produto vai aparecer. Escolha o ambiente que combina com o vibe do produto.
+          {typeId && idealScenarioIds.length > 0 && (
+            <span style={{ color: 'var(--gr)', display: 'block', marginTop: 4 }}>
+              💡 Destacamos os cenários ideais pro tipo <strong>{POV_TYPES.find((t) => t.id === typeId)?.name}</strong>.
+            </span>
+          )}
         </p>
 
         {POV_SCENARIO_GROUPS.map((group) => {
           const scenariosOfGroup = POV_SCENARIOS.filter((s) => s.group === group.id);
           if (scenariosOfGroup.length === 0) return null;
           return (
-            <GroupedGrid
+            <FilteredGroupedGrid
               key={group.id}
               groupLabel={`${group.emoji} ${group.name}`}
               items={scenariosOfGroup}
               selectedId={scenarioId}
               onSelect={setScenarioId}
+              claudeRecommendedId={claudeRecommendations?.scenarioId}
+              idealIds={idealScenarioIds}
             />
           );
         })}
@@ -781,23 +916,31 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
   }
 
   function renderStep6Style() {
+    // 🆕 v2.0 — Visual do POV (Plano v4): Câmera + Interação + Imperfeição + Naturalidade
+    const naturalDisabled = imperfectionDisablesNaturality(imperfectionId);
+    const selectedImperfection = imperfectionId
+      ? POV_IMPERFECTIONS.find((i) => i.id === imperfectionId)
+      : null;
+
     return (
       <div className="card">
-        <div className="card-title">Estilo de câmera</div>
+        <div className="card-title">Visual do POV</div>
         <p className="hint" style={{ marginBottom: 16 }}>
-          Como a câmera vai mostrar o produto. Escolha 1 abordagem visual.
+          Como a câmera vai mostrar o produto. Combine câmera + interação + nível de imperfeição visual.
         </p>
 
+        {/* ── 1. Câmera + Interação (8 estilos atuais, 2 grupos) ───── */}
         {POV_STYLE_CATEGORIES.map((cat) => {
           const stylesOfCat = POV_STYLES.filter((s) => s.category === cat.id);
           if (stylesOfCat.length === 0) return null;
           return (
-            <GroupedGrid
+            <FilteredGroupedGrid
               key={cat.id}
               groupLabel={`${cat.emoji || '🎬'} ${cat.name}`}
               items={stylesOfCat}
               selectedId={styleId}
               onSelect={setStyleId}
+              claudeRecommendedId={claudeRecommendations?.styleId}
             />
           );
         })}
@@ -805,6 +948,89 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
         {styleId && (
           <InfoBox label="💡 Bom pra:" text={POV_STYLES.find((s) => s.id === styleId)?.bestFor} />
         )}
+
+        {/* ── 2. Separador L2 ──────────────────────────────────────── */}
+        <div style={{
+          height: 1,
+          background: 'var(--bd)',
+          margin: '20px 0 18px',
+        }} />
+
+        {/* ── 3. Nível de Imperfeição (6 opções NOVO) ──────────────── */}
+        <div style={{
+          fontSize: 11,
+          color: 'var(--t2)',
+          textTransform: 'uppercase',
+          letterSpacing: 1,
+          fontWeight: 700,
+          marginBottom: 8,
+        }}>
+          🎬 Nível de Imperfeição <span style={{ color: 'var(--t3)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(opcional — controla o quão "produzido" ou "cru" o vídeo parece)</span>
+        </div>
+        <FilteredGroupedGrid
+          groupLabel=""
+          items={POV_IMPERFECTIONS}
+          selectedId={imperfectionId}
+          onSelect={(id) => {
+            // Toggle: clicar de novo na mesma desseleciona (volta pra null)
+            setImperfectionId((curr) => (curr === id ? null : id));
+          }}
+          claudeRecommendedId={claudeRecommendations?.imperfectionId}
+        />
+
+        {selectedImperfection && (
+          <InfoBox
+            label={`🎬 Imperfeição: ${selectedImperfection.name}`}
+            text={selectedImperfection.bestFor || selectedImperfection.description}
+          />
+        )}
+
+        {/* ── 4. Checkbox Naturalidade Extra (NOVO) ───────────────── */}
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            cursor: naturalDisabled ? 'not-allowed' : 'pointer',
+            background: naturalDisabled ? 'rgba(255,255,255,0.02)' : 'var(--sf)',
+            border: `1px solid ${naturalExtra && !naturalDisabled ? 'var(--g)' : 'var(--bd)'}`,
+            borderRadius: 'var(--rs)',
+            padding: 12,
+            marginTop: 14,
+            opacity: naturalDisabled ? 0.55 : 1,
+            transition: 'all 0.2s',
+          }}
+          title={naturalDisabled
+            ? 'Esta imperfeição já tem naturalidade nativa — não precisa do extra'
+            : 'Adiciona micro-shake e focus breathing pra parecer ainda mais autêntico'}
+        >
+          <input
+            type="checkbox"
+            checked={naturalExtra && !naturalDisabled}
+            disabled={naturalDisabled}
+            onChange={(e) => setNaturalExtra(e.target.checked)}
+            style={{
+              cursor: naturalDisabled ? 'not-allowed' : 'pointer',
+              marginTop: 2,
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, color: 'var(--t)', fontWeight: 600, marginBottom: 3 }}>
+              ✨ Naturalidade extra
+              {naturalDisabled && (
+                <span style={{ fontSize: 10, color: 'var(--t3)', fontWeight: 400, marginLeft: 8 }}>
+                  (já incluído neste nível)
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--t3)', lineHeight: 1.4 }}>
+              {naturalDisabled
+                ? `O nível "${selectedImperfection?.name}" já tem naturalidade nativa.`
+                : 'Adiciona handheld sutil + focus breathing + micro-ajustes na câmera (NATURALITY_EXTRA_DIRECTIVE).'}
+            </div>
+          </div>
+        </label>
       </div>
     );
   }
@@ -981,14 +1207,88 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
 
     const voicesAvailable = influencerGender === 'male' ? VOICES_MALE : VOICES_FEMALE;
 
+    // 🆕 v2.0 — Vozes recomendadas pra intensidade selecionada (Plano v4)
+    const selectedIntensity = intensityId
+      ? POV_INTENSITIES.find((i) => i.id === intensityId)
+      : null;
+    const recommendedVoiceIdForIntensity = selectedIntensity
+      ? (selectedIntensity.recommendedVoices?.[influencerGender] || null)
+      : null;
+    const allMatchingVoiceIds = intensityId
+      ? voicesAvailable
+          .filter((v) => voiceMatchesIntensity(v.id, intensityId))
+          .map((v) => v.id)
+      : [];
+
     return (
       <div className="card">
         <div className="card-title">Voz pra narração (ElevenLabs v3)</div>
-        <p className="hint" style={{ marginBottom: 16 }}>
-          Voz que vai narrar o vídeo. Filtramos por gênero da influencer ({influencerGender === 'male' ? 'masculinas' : 'femininas'}).
-          {voiceId && (
+
+        {/* ── 🆕 v2.0 — Intensidade Humana (Plano v4) ──────────────── */}
+        <div style={{
+          fontSize: 11,
+          color: 'var(--t2)',
+          textTransform: 'uppercase',
+          letterSpacing: 1,
+          fontWeight: 700,
+          marginTop: 4,
+          marginBottom: 8,
+        }}>
+          🎚️ Intensidade Humana <span style={{ color: 'var(--t3)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(opcional — controla o tom/ritmo da fala)</span>
+        </div>
+        <p className="hint" style={{ marginBottom: 12 }}>
+          Define o estilo de fala do roteiro: do comercial limpo ao hype urgente.
+          {imperfectionId && intensityId === IMPERFECTION_TO_INTENSITY_DEFAULT[imperfectionId] && (
             <span style={{ color: 'var(--gr)', display: 'block', marginTop: 4 }}>
-              💡 Sugerimos <strong>{voiceId}</strong> baseado no estilo de câmera escolhido.
+              💡 Pré-selecionada com base na imperfeição visual escolhida no Step 6.
+            </span>
+          )}
+        </p>
+
+        <FilteredGroupedGrid
+          groupLabel=""
+          items={POV_INTENSITIES}
+          selectedId={intensityId}
+          onSelect={(id) => {
+            // Toggle: clicar de novo desseleciona (volta pra null)
+            setIntensityId((curr) => (curr === id ? null : id));
+          }}
+        />
+
+        {selectedIntensity && (
+          <InfoBox
+            label={`🎚️ Intensidade: ${selectedIntensity.name}`}
+            text={selectedIntensity.bestFor || selectedIntensity.description}
+          />
+        )}
+
+        {/* ── Separador L2 ────────────────────────────────────────── */}
+        <div style={{
+          height: 1,
+          background: 'var(--bd)',
+          margin: '20px 0 14px',
+        }} />
+
+        {/* ── Vozes (com filtragem 3 níveis se tem intensidade) ───── */}
+        <div style={{
+          fontSize: 11,
+          color: 'var(--t2)',
+          textTransform: 'uppercase',
+          letterSpacing: 1,
+          fontWeight: 700,
+          marginBottom: 8,
+        }}>
+          🎙️ Vozes disponíveis <span style={{ color: 'var(--t3)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>({influencerGender === 'male' ? 'masculinas' : 'femininas'})</span>
+        </div>
+        <p className="hint" style={{ marginBottom: 12 }}>
+          {voiceId && (
+            <span>
+              💡 Voz selecionada: <strong>{voiceId}</strong>.
+            </span>
+          )}
+          {intensityId && allMatchingVoiceIds.length > 0 && (
+            <span style={{ color: 'var(--gr)', display: 'block', marginTop: 4 }}>
+              ✨ Destacamos as vozes recomendadas pra <strong>{selectedIntensity?.name}</strong>.
             </span>
           )}
         </p>
@@ -1000,23 +1300,70 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
         }}>
           {voicesAvailable.map((v) => {
             const isSelected = v.id === voiceId;
+            const isRecommendedForIntensity = recommendedVoiceIdForIntensity === v.id;
+            const isMatchingIntensity = intensityId && allMatchingVoiceIds.includes(v.id);
+            // 3 níveis: recommended (🎯 dourado) > matching (✨ verde) > dimmed (50%)
+            const hasFiltering = !!intensityId;
+            const isDimmed = hasFiltering && !isRecommendedForIntensity && !isMatchingIntensity && !isSelected;
+
+            let border, background, glow;
+            if (isSelected) {
+              border = '2px solid var(--g)';
+              background = 'rgba(212,165,116,0.1)';
+              glow = isRecommendedForIntensity ? '0 0 12px rgba(212,165,116,0.35)' : 'none';
+            } else if (isRecommendedForIntensity) {
+              border = '2px solid var(--g)';
+              background = 'rgba(212,165,116,0.05)';
+              glow = '0 0 10px rgba(212,165,116,0.25)';
+            } else if (isMatchingIntensity) {
+              border = '2px solid rgba(107,189,138,0.5)';
+              background = 'rgba(107,189,138,0.04)';
+              glow = 'none';
+            } else {
+              border = '2px solid var(--bd)';
+              background = 'var(--cd)';
+              glow = 'none';
+            }
+
             return (
               <div
                 key={v.id}
                 onClick={() => setVoiceId(v.id)}
                 style={{
-                  background: isSelected ? 'rgba(212,165,116,0.1)' : 'var(--cd)',
-                  border: isSelected ? '2px solid var(--g)' : '2px solid var(--bd)',
+                  background,
+                  border,
+                  boxShadow: glow,
                   borderRadius: 'var(--rs)',
                   padding: 12,
                   cursor: 'pointer',
                   transition: 'all 0.2s',
+                  opacity: isDimmed ? 0.5 : 1,
+                  position: 'relative',
                 }}
               >
+                {(isRecommendedForIntensity || isMatchingIntensity) && !isSelected && (
+                  <div style={{
+                    position: 'absolute',
+                    top: -8,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    fontSize: 9,
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: 8,
+                    background: isRecommendedForIntensity ? 'var(--g)' : 'rgba(107,189,138,0.85)',
+                    color: '#0a0a0a',
+                    letterSpacing: 0.5,
+                    textTransform: 'uppercase',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {isRecommendedForIntensity ? '🎯 Recomendada' : '✨ Combina'}
+                  </div>
+                )}
                 <div style={{
                   fontSize: 14,
                   fontWeight: 700,
-                  color: isSelected ? 'var(--g)' : 'var(--t)',
+                  color: isSelected ? 'var(--g)' : (isRecommendedForIntensity ? 'var(--g)' : 'var(--t)'),
                   marginBottom: 4,
                 }}>
                   {isSelected && '✓ '}{v.id}
@@ -1334,6 +1681,135 @@ function InfoBox({ label, text }) {
       </div>
       <div style={{ fontSize: 13, color: 'var(--t)', lineHeight: 1.5 }}>
         {text}
+      </div>
+    </div>
+  );
+}
+
+// 🆕 v2.0 — Grid agrupado COM filtragem visual 3 níveis (Plano v4)
+//   🎯 claudeRecommendedId → border dourada + glow + badge "🎯 Claude"
+//   ✨ idealIds (Set ou Array) → border colorida + badge "✨ Ideal"
+//   Resto → opacity 0.5 (clicável, fica visível mas suave)
+//
+// Se claudeRecommendedId e idealIds são null/empty, comporta-se igual ao
+// GroupedGrid normal (todos cards normais). Não-quebra retrocompat.
+function FilteredGroupedGrid({
+  groupLabel,
+  items,
+  selectedId,
+  onSelect,
+  claudeRecommendedId = null,
+  idealIds = null,
+}) {
+  // Normaliza idealIds pra Set pra lookup O(1)
+  const idealSet = useMemo(() => {
+    if (!idealIds) return null;
+    return new Set(Array.isArray(idealIds) ? idealIds : []);
+  }, [idealIds]);
+
+  const hasFiltering = !!claudeRecommendedId || (idealSet && idealSet.size > 0);
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      {groupLabel && (
+        <div style={{
+          fontSize: 11,
+          color: 'var(--t2)',
+          textTransform: 'uppercase',
+          letterSpacing: 1,
+          fontWeight: 700,
+          marginBottom: 8,
+        }}>
+          {groupLabel}
+        </div>
+      )}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+        gap: 8,
+      }}>
+        {items.map((item) => {
+          const isSelected = item.id === selectedId;
+          const isClaude = claudeRecommendedId && item.id === claudeRecommendedId;
+          const isIdeal = idealSet && idealSet.has(item.id);
+          const isDimmed = hasFiltering && !isClaude && !isIdeal && !isSelected;
+
+          // Cores e estilos por nível
+          let border, background, glow;
+          if (isSelected) {
+            border = '2px solid var(--g)';
+            background = 'rgba(212,165,116,0.1)';
+            glow = isClaude ? '0 0 16px rgba(212,165,116,0.4)' : 'none';
+          } else if (isClaude) {
+            border = '2px solid var(--g)';
+            background = 'rgba(212,165,116,0.06)';
+            glow = '0 0 12px rgba(212,165,116,0.3)';
+          } else if (isIdeal) {
+            border = '2px solid rgba(107,189,138,0.5)';
+            background = 'rgba(107,189,138,0.04)';
+            glow = 'none';
+          } else {
+            border = '2px solid var(--bd)';
+            background = 'var(--cd)';
+            glow = 'none';
+          }
+
+          return (
+            <div
+              key={item.id}
+              onClick={() => onSelect(item.id)}
+              style={{
+                background,
+                border,
+                boxShadow: glow,
+                borderRadius: 'var(--rs)',
+                padding: 12,
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                textAlign: 'center',
+                opacity: isDimmed ? 0.5 : 1,
+                position: 'relative',
+              }}
+            >
+              {/* Badge superior — Claude rec ou Ideal */}
+              {(isClaude || isIdeal) && !isSelected && (
+                <div style={{
+                  position: 'absolute',
+                  top: -8,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  padding: '2px 6px',
+                  borderRadius: 8,
+                  background: isClaude ? 'var(--g)' : 'rgba(107,189,138,0.85)',
+                  color: '#0a0a0a',
+                  letterSpacing: 0.5,
+                  textTransform: 'uppercase',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {isClaude ? '🎯 Claude' : '✨ Ideal'}
+                </div>
+              )}
+              <div style={{ fontSize: 28, marginBottom: 6 }}>{item.emoji}</div>
+              <div style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: isSelected ? 'var(--g)' : (isClaude ? 'var(--g)' : 'var(--t)'),
+                marginBottom: 4,
+              }}>
+                {isSelected && '✓ '}{item.name}
+              </div>
+              <div style={{
+                fontSize: 10,
+                color: 'var(--t3)',
+                lineHeight: 1.3,
+              }}>
+                {item.description}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
