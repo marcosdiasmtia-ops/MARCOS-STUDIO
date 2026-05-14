@@ -1,4 +1,15 @@
-// src/PovGallery.jsx (v1.0 — Sub-lote 3c — galeria de POVs gerados)
+// src/PovGallery.jsx (v1.1 — Opção C: exibe NAME amigável da voz em vez do id/hash)
+//
+// CHANGELOG v1.1 (13/05/2026 — Opção C, Sub-passo 3):
+//   🆕 No modal de detalhes do POV, o campo "Áudio: Com voz (X)" agora
+//      exibe o NOME amigável da voz (ex: "Raquel") em vez do id cru
+//      (que vai virar voice_id hash do ElevenLabs Voice Library no v2.0
+//      do data file).
+//   🔁 Retrocompat 100%: usa fallback `voice?.name || w.voiceId` — se o
+//      data file ainda não tiver `name` (vozes anglo legacy), exibe o id
+//      idêntico ao comportamento v1.0.
+//
+// CHANGELOG v1.0 (10/05/2026 — Sub-lote 3c):
 //
 // Lista todos os POVs gerados anteriormente (salvos em localStorage por
 // PovOutput.jsx). Permite filtrar, abrir, gerar variação, editar config,
@@ -36,6 +47,7 @@ import { POV_TYPES } from './data/pov-types';
 import { POV_SCENARIOS } from './data/pov-scenarios';
 import { POV_STYLES } from './data/pov-styles';
 import { POV_DURATIONS } from './data/pov-durations';
+import { getVoiceById } from './data/pov-elevenlabs-voices'; // 🆕 v1.1 (Opção C — resolver name a partir de id)
 
 const POV_GALLERY_KEY = 'marcos-studio-pov-gallery';
 
@@ -592,7 +604,7 @@ function PovDetailModal({ item, onClose, onVariation, onEdit, onDelete }) {
             <div><strong>Cenário:</strong> {scenario?.emoji} {scenario?.name}</div>
             <div><strong>Estilo:</strong> {style?.name}</div>
             <div><strong>Duração:</strong> {duration?.label} ({duration?.composition})</div>
-            <div><strong>Áudio:</strong> {w.audioMode === 'voiced' ? `🎙️ Com voz (${w.voiceId})` : '🔇 Sem voz'}</div>
+            <div><strong>Áudio:</strong> {w.audioMode === 'voiced' ? `🎙️ Com voz (${getVoiceById(w.voiceId)?.name || w.voiceId})` : '🔇 Sem voz'}</div>
           </div>
         </div>
 
