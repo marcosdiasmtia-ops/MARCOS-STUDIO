@@ -1,18 +1,31 @@
-// api/pov-elevenlabs-tts.js (v1.2 — reverte v1.1: 'pt-BR' rejeitado pelo fal.ai com 422)
+// api/pov-elevenlabs-tts.js (v1.3 — Opção C: aceita vozes BR nativas via voice_id hash)
+//
+// 🆕 v1.3 (13/05/2026) — MIGRAÇÃO PRA VOZES BR NATIVAS (Opção C).
+//    A v1.1 ('pt-BR' como language_code) foi rejeitada pelo fal.ai (422).
+//    A v1.2 reverteu pra 'pt', mas o sotaque continuou europeu — confirmando
+//    que a causa é STRUCTURAL: vozes anglo (Sarah, Aria, Brian, etc.) têm
+//    DNA de inglês e adotam sotaque europeu como default quando falam PT.
+//
+//    Solução real (recomendada pelo próprio ElevenLabs): trocar pra vozes
+//    BR nativas treinadas em português brasileiro, disponíveis na Voice
+//    Library. O fal.ai aceita tanto NOME curto ("Sarah") quanto VOICE_ID
+//    hash ("GDzHdQOi6jjf8zaXhCYD") no campo `voice` do payload — confirmado
+//    na doc oficial fal.ai/elevenlabs/tts/multilingual-v2.
+//
+//    Esta v1.3 atualiza VALID_VOICES pra incluir os 13 hashes BR escolhidos
+//    pelo Marcos na Voice Library (7F + 6M, todas com sotaque BR autêntico).
+//    Mantém as 20 vozes anglo legacy temporariamente pra retrocompat — serão
+//    removidas em v1.4 após validação das BR em produção.
 //
 // 🔄 v1.2 (13/05/2026) — REVERSÃO da v1.1.
 //    Tentativa v1.1 de passar 'pt-BR' como language_code foi rejeitada pelo
 //    fal.ai com erro 422 ("Unprocessable Entity"). O campo language_code do
 //    Eleven v3 é ESTRITAMENTE ISO 639-1 (2 letras) e não aceita variantes
 //    regionais como 'pt-BR'. Voltamos pro default 'pt'.
-//    Próxima abordagem (Opção B): forçar sotaque BR via pistas linguísticas
-//    no próprio texto (system prompt do pov-script.js) — não via parâmetro.
 //
 // 🆕 v1.1 (13/05/2026) — Fix sotaque PT-BR: default de languageCode mudou
 //    de 'pt' (genérico, tendia a sotaque europeu) pra 'pt-BR' (IETF BCP 47,
-//    força português brasileiro). Sintoma corrigido: vozes anglo do Eleven v3
-//    (Sarah, Aria, Brian, etc.) saíam com sotaque de Portugal em vez do Brasil.
-//    🔻 REVERTIDA NA v1.2 — fal.ai rejeita 'pt-BR' com 422.
+//    força português brasileiro). 🔻 REVERTIDA NA v1.2 — fal.ai rejeita.
 //
 // Endpoint ATÔMICO que gera UM áudio de fala pra UM take POV (modo 'voiced').
 // O áudio sai como MP3 hospedado no fal.ai, pronto pra mergear com o vídeo
@@ -65,10 +78,37 @@ const ELEVENLABS_FALLBACK = 'fal-ai/elevenlabs/tts/multilingual-v2';
 // ════════════════════════════════════════════════════════════════════════
 //
 // 🔁 SE ALTERAR pov-elevenlabs-voices.js, ATUALIZE AQUI.
-// Inclui as 15 vozes do data file + as 5 oficiais do fal.ai não escolhidas
-// (Rachel, Roger, Charlie, Callum, River, Chris) pra aceitar uso direto.
+//
+// 🆕 v1.3: agora aceita 13 voice_id hashes BR (vozes nativas da Voice Library
+// do ElevenLabs, todas com sotaque brasileiro autêntico). As 20 vozes anglo
+// legacy (Sarah, Aria, etc.) continuam aceitas durante transição — serão
+// removidas em v1.4 após validação das BR em produção.
+//
+// O fal.ai aceita tanto nomes curtos quanto voice_id hashes no campo `voice`.
 
 const VALID_VOICES = [
+  // ────────────────────────────────────────────────────────────────────
+  // 🇧🇷 13 vozes BR nativas (Voice Library ElevenLabs) — v1.3
+  // ────────────────────────────────────────────────────────────────────
+  // 7 femininas
+  'GDzHdQOi6jjf8zaXhCYD',  // Raquel — jovem energética/forte/calorosa
+  'xPnmQf6Ow3GGYWWURFPi',  // Paula — jovem suave/contemplativa
+  'RGymW84CSmfVugnA5tvA',  // Roberta — jovem amigável/calorosa
+  'GOkMqfyKMLVUcYfO2WbB',  // Jenifer — jovem natural sotaque interior SP
+  'gX4eTo1XOTTALJXnDro4',  // Mulher brasileira adulta — madura fluida storytelling
+  'KHmfNHtEjHhLK9eER20w',  // Fernanda — clara profissional acolhedora
+  'tZ2oxQJXfOrGrN7iKnta',  // Mariana — enérgica ensolarada (licença perpétua)
+  // 6 masculinas
+  'aU2vcrnwi348Gnc2Y1si',  // José — idoso rural SP, vibe personagem
+  '83Nae6GFQiNslSbuzmE7',  // Eduardo Monteiro — firme nordestino (Alagoas)
+  'NQ10OlqJ7vYH6XwegHSW',  // Lucke — direto neutro conversacional (perpétua)
+  'Zk0wRqIFBWGMu2lIk7hw',  // Marcio — cativante persuasivo comercial
+  '3Je7qW9yPOhc47iG41pH',  // Yuri — jovem casual amigável caloroso
+  'xWdpADtEio43ew1zGxUQ',  // Matheus Santos — jovem 28a amigável calmo
+
+  // ────────────────────────────────────────────────────────────────────
+  // 🔻 LEGACY anglo — mantidas pra retrocompat (serão removidas em v1.4)
+  // ────────────────────────────────────────────────────────────────────
   // 8 femininas escolhidas
   'Sarah', 'Aria', 'Charlotte', 'Alice', 'Matilda', 'Lily', 'Jessica', 'Laura',
   // 7 masculinas escolhidas
