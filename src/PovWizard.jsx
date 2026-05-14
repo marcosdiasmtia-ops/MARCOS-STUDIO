@@ -1,4 +1,18 @@
-// src/PovWizard.jsx (v2.0 — Plano v4: Visual do POV expandido + Intensidade Humana + filtragem inteligente)
+// src/PovWizard.jsx (v2.1 — Opção C: UI exibe NAME amigável da voz em vez do id/hash)
+//
+// CHANGELOG v2.1 (13/05/2026 — Opção C, Sub-passo 2):
+//   🆕 UI agora exibe o `name` amigável da voz (ex: "Raquel") em vez do
+//      `id` cru (ex: "GDzHdQOi6jjf8zaXhCYD"). Mudança preparatória pra
+//      migração das 15 vozes anglo → 13 vozes BR nativas (cujos ids são
+//      voice_id hashes do ElevenLabs Voice Library).
+//   🆕 Adicionado import de `getVoiceById` pra resolver name a partir de id.
+//   🔁 Retrocompat 100%: usa fallback `v.name || v.id` em todos os displays.
+//      Quando o data file v2.0 ainda não estiver deployado (vozes anglo
+//      sem `name`), a UI exibe `id` (Sarah, Aria, etc.) idêntico ao
+//      comportamento atual. Após data file v2.0 (vozes BR com `name`),
+//      a UI exibe nomes humanos (Raquel, Paula, etc.).
+//   🔁 Lógica interna (comparações, useEffect, mappings, payload pro backend)
+//      continua usando `v.id` — só o RENDERING mudou.
 //
 // CHANGELOG v2.0 (12/05/2026 — Plano v4, Sub-lote C1):
 //   🆕 Step 6 RENOMEADO "Estilo de câmera" → "Visual do POV". Reformulado
@@ -80,6 +94,7 @@ import {
   VOICE_BY_STYLE_FEMALE,
   VOICE_BY_STYLE_MALE,
   voiceMatchesIntensity,            // 🆕 v2.0
+  getVoiceById,                     // 🆕 v2.1 (Opção C — resolver name a partir de id)
 } from './data/pov-elevenlabs-voices';
 import { POV_INTENSITIES } from './data/pov-intensities';  // 🆕 v2.0
 import {
@@ -1283,7 +1298,7 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
         <p className="hint" style={{ marginBottom: 12 }}>
           {voiceId && (
             <span>
-              💡 Voz selecionada: <strong>{voiceId}</strong>.
+              💡 Voz selecionada: <strong>{getVoiceById(voiceId)?.name || voiceId}</strong>.
             </span>
           )}
           {intensityId && allMatchingVoiceIds.length > 0 && (
@@ -1366,7 +1381,7 @@ RESPONDA APENAS JSON VÁLIDO (sem markdown, sem backticks):
                   color: isSelected ? 'var(--g)' : (isRecommendedForIntensity ? 'var(--g)' : 'var(--t)'),
                   marginBottom: 4,
                 }}>
-                  {isSelected && '✓ '}{v.id}
+                  {isSelected && '✓ '}{v.name || v.id}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--t3)', lineHeight: 1.4 }}>
                   {v.description}
