@@ -1,4 +1,18 @@
-// api/pov-kling-prompts.js (v2.0 — Plano v4: 22 tipos, 37 cenários, imperfection, naturalExtra, motionIntensity, secondaryObjects, prefixo fidelidade)
+// api/pov-kling-prompts.js (v2.1 — alinha referências de 10s → 15s pra Kling v3 Standard)
+//
+// CHANGELOG v2.1 (18/05/2026):
+//   🆕 ATUALIZA REFERÊNCIAS A "10 SECONDS" → "15 SECONDS" e
+//      "Kling 2.6 Pro" → "Kling v3 Standard" no system prompt + comentários.
+//
+//      Não muda comportamento — só mantém o prompt do Claude COERENTE com a
+//      nova realidade do pipeline POV (migrou pra Kling v3 Standard 15s
+//      nesta mesma sessão pra fix definitivo do freeze frame).
+//
+//      Sem essa atualização, o Claude teria duas instruções conflitantes:
+//      "anima por 10 segundos" no system prompt, mas o vídeo real seria de
+//      15s. Modelo poderia gerar prompts subdimensionados pro tempo total.
+//
+//   📌 Retrocompat 100%: schema de input/output inalterado.
 //
 // CHANGELOG v2.0 (12/05/2026 — Plano v4, Sub-lote B):
 //   🆕 TYPE_PROMPT_HINTS expandido pra 22 tipos (era 11).
@@ -29,14 +43,14 @@
 //      "Preserve the product exactly as shown in the base image. No
 //      changes to design, label, color, shape, or branding during motion."
 //      Isso reforça o anchor visual do Nano Banana Pro durante a animação
-//      do Kling 2.6 Pro, evitando que detalhes do produto desviem ao longo
-//      dos 10s. Mecanismo robusto: se Claude já incluiu a frase no prompt
+//      do Kling v3 Standard, evitando que detalhes do produto desviem ao longo
+//      dos 15s. Mecanismo robusto: se Claude já incluiu a frase no prompt
 //      (porque o system prompt pede isso), não duplica.
 //   🆕 max_tokens aumentado pra 4096 (era 3072) — mais regras = mais texto.
 //
 // Endpoint que recebe (script, typeId, scenarioId, styleId, handsConfig,
-// produto + extras do Plano v4) e gera os N PROMPTS EM INGLÊS pro Kling 2.6
-// Pro animar cada take de 10s.
+// produto + extras do Plano v4) e gera os N PROMPTS EM INGLÊS pro Kling v3
+// Standard animar cada take de 15s.
 //
 // Cada prompt do Kling é INDEPENDENTE — descreve o que acontece naquele take
 // específico, ancorado na imagem-base do Nano Banana Pro (gerada pelo
@@ -47,7 +61,7 @@
 //   1. pov-script.js     → roteiro PT-BR com N takes (com intensidade opcional)
 //   2. pov-image-base.js → imagem-base (com seed compartilhado opcional)
 //   3. pov-kling-prompts (ESTE)  → N prompts em inglês descrevendo movimento
-//   4. pov-kling-generate.js → roda Kling 2.6 Pro pra cada (imagem, prompt) → vídeo 10s
+//   4. pov-kling-generate.js → roda Kling v3 Standard pra cada (imagem, prompt) → vídeo 15s
 //
 // Cada prompt tem estrutura [HANDS] + [ACTION] + [PRODUCT] + [CAMERA] +
 // [ENVIRONMENT] + opcionalmente [IMPERFECTION] + [SECONDARY OBJECTS].
@@ -415,9 +429,9 @@ PRODUCT FIDELITY (CRITICAL):
 - Each prompt MUST begin with: "Preserve the product exactly as shown in the base image. No changes to design, label, color, shape, or branding during motion."
 - If the base image shows a specific product orientation/state, motion should keep it visually consistent.`;
 
-    const systemPrompt = `You generate cinematic image-to-video prompts in ENGLISH for the Kling 2.6 Pro model on fal.ai.
+    const systemPrompt = `You generate cinematic image-to-video prompts in ENGLISH for the Kling v3 Standard model on fal.ai.
 
-Each prompt animates a static base image (already prepared by Nano Banana Pro) for 10 seconds. Your job is to describe the MOTION/ACTION that should happen in those 10 seconds, anchored on the existing visual context.
+Each prompt animates a static base image (already prepared by Nano Banana Pro) for 15 seconds. Your job is to describe the MOTION/ACTION that should happen in those 15 seconds, anchored on the existing visual context.
 
 You will write ${totalTakes} prompts — one per take — that together tell a coherent micro-story about a product, in TikTok POV style.
 
@@ -461,7 +475,7 @@ RESPOND ONLY VALID JSON (no markdown, no backticks):
   ]
 }`;
 
-    const userText = `Generate the ${totalTakes} Kling 2.6 Pro motion prompts following the rules above.
+    const userText = `Generate the ${totalTakes} Kling v3 Standard motion prompts following the rules above.
 
 ${productPhotoBase64 ? 'Product photo attached above for visual reference.' : 'No product photo — work from the name and description.'}
 
