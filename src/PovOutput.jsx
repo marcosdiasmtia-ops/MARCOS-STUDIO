@@ -1,4 +1,31 @@
-// src/PovOutput.jsx (v2.0 — Plano v4: Soluções A+B+C + UI do package expandida)
+// src/PovOutput.jsx (v3.0 — migra POV pra Kling v3 Standard 15s/take)
+//
+// CHANGELOG v3.0 (18/05/2026):
+//   🆕 MIGRAÇÃO PRA KLING V3 STANDARD 15s — peça final do pacote:
+//      - submitPovKlingVideo agora passa `duration: '15'` (era '10').
+//      - composePovFinal agora passa `takeDurationSeconds: 15` (era 10).
+//      - StatusMessage atualizada de "Kling 2.6 Pro" pra "Kling v3 Standard".
+//
+//      MOTIVO: fix definitivo do "freeze frame no final do vídeo POV".
+//      Vozes BR migradas em 13/05/2026 falam ~50% mais devagar que vozes
+//      anglo, gerando áudios de 12-15s pras 25-30 palavras do voiceText.
+//      Esses áudios estouravam o slot de 10s do Kling 2.6 Pro e o FFmpeg
+//      compose estendia o último frame congelado em vez de truncar.
+//      Slot de 15s comporta 35-45 palavras PT-BR confortavelmente.
+//
+//   📌 PIPELINE INTEIRO ATUALIZADO NESTA SESSÃO (18/05/2026):
+//      1. api/pov-kling-generate.js v3.0 (endpoint Kling v3 Standard)
+//      2. api/pov-compose-final.js v1.2 (default takeDurationSeconds=15)
+//      3. api/pov-script.js v3.0 (voiceText recalibrado pra 35-45 palavras)
+//      4. api/pov-kling-prompts.js v2.1 (refs "15 seconds" no system prompt)
+//      5. src/data/pov-durations.js v2.0 (4 novas durações: 15/30/45/60)
+//      6. src/PovOutput.jsx v3.0 (ESTE — orchestrator final liga tudo)
+//
+//   📌 Retrocompat:
+//      - Pipeline ainda funciona se algum backend não estiver atualizado
+//        (Kling v3 aceita duration='10' tb, compose aceita takeDur=10).
+//      - Galeria com POVs antigos (durationId='20s' ou '40s') exibe '—'
+//        no label da duração mas não quebra.
 //
 // CHANGELOG v2.0 (12/05/2026 — Plano v4, Sub-lote C2 — ÚLTIMO arquivo do plano!):
 //   🆕 Solução A — `buildImagePrompt` REESCRITO:
@@ -320,7 +347,7 @@ export default function PovOutput({ wizardData, onStartNew }) {
       setStageStatus('images', 'done');
 
       // ── ETAPA 5a: Submeter vídeos Kling (paralelo) + polling ─────────
-      setStatusMessage(`🎬 Submetendo ${N} vídeos ao Kling 2.6 Pro...`);
+      setStatusMessage(`🎬 Submetendo ${N} vídeos ao Kling v3 Standard...`);
       setStageStatus('videos', 'in-progress');
       const videoSubmissions = await Promise.all(
         promptsResult.prompts.map(async (p, idx) => {
@@ -330,7 +357,7 @@ export default function PovOutput({ wizardData, onStartNew }) {
           const sub = await submitPovKlingVideo({
             prompt: p.klingPrompt,
             startImageUrl,
-            duration: '10',
+            duration: '15',
             generateAudio: false,
             takeNumber,
           });
@@ -419,7 +446,7 @@ export default function PovOutput({ wizardData, onStartNew }) {
           stage: 'start',
           videoUrls,
           audioUrls,
-          takeDurationSeconds: 10, // Kling 2.6 Pro: cada take = 10s
+          takeDurationSeconds: 15, // Kling v3 Standard: cada take = 15s
         });
         const result = await pollUntilComplete(sub, {
           intervalMs: COMPOSE_POLL_INTERVAL_MS,
@@ -624,7 +651,7 @@ export default function PovOutput({ wizardData, onStartNew }) {
 
         <p className="hint" style={{ textAlign: 'center', marginTop: 16, fontSize: 11 }}>
           ⚠️ Não feche esta aba enquanto o vídeo é gerado.
-          O Kling 2.6 Pro leva 2-7min por take pra renderizar.
+          O Kling v3 Standard leva 2-7min por take pra renderizar.
         </p>
       </div>
     );
