@@ -1,4 +1,27 @@
-// api/pov-script.js (v2.0 — Plano v4: formato TikTok falado + intensityId + schema expandido)
+// api/pov-script.js (v3.0 — recalibra voiceText pra slot de 15s do Kling v3 Standard)
+//
+// CHANGELOG v3.0 (18/05/2026):
+//   🆕 RECALIBRA voiceText pra 35-45 palavras (≈12-14s de fala PT-BR)
+//      Era: 25-30 palavras (≈8-10s) calibrado pra slot de 10s do Kling 2.6 Pro.
+//      Agora: 35-45 palavras (≈12-14s) calibrado pra slot de 15s do Kling v3 Std.
+//
+//      MOTIVO ESTRUTURAL: vozes BR migradas em 13/05/2026 falam ~50% mais
+//      devagar que as vozes anglo do core. As mesmas 25-30 palavras em PT-BR
+//      duravam 12-15s — estouravam o slot de 10s e geravam freeze frame no
+//      final. A migração pra Kling v3 Std 15s (em paralelo nessa sessão)
+//      sobe o teto pra 15s, então o voiceText pode crescer proporcionalmente.
+//
+//      RESULTADO ESPERADO: áudio cabe dentro do slot, vídeo termina junto
+//      com a fala, sem freeze frame e sem silêncio sobrando.
+//
+//   🆕 Estrutura INTRATAKE escalada pra 15s:
+//      Antes: 0-2s entrada / 2-7s ação CAPS / 7-10s gancho
+//      Agora: 0-3s entrada / 3-11s ação CAPS / 11-15s gancho
+//
+//   📌 Retrocompat 100%:
+//      - Schema de input/output inalterado.
+//      - Mudanças são SÓ instruções textuais pro Claude no system prompt.
+//      - PovOutput chama esse endpoint exatamente igual.
 //
 // CHANGELOG v2.0 (12/05/2026 — Plano v4, Sub-lote B):
 //   🆕 Aceita `intensityId` (opcional, só relevante se audioMode='voiced').
@@ -268,8 +291,8 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
 - TOTAL de frases on-screen: ${config.hookCount + config.demoMin + config.ctaCount} a ${config.hookCount + config.demoMax + config.ctaCount}`
       : `MODO DE ÁUDIO: VOICED (narração off com voz "${voiceId}" do Eleven v3)
 - voiceText DEVE estar PREENCHIDO em TODOS os ${totalTakes} takes
-- Cada voiceText: ~25-30 palavras (≈8-10s de fala natural em PT-BR coloquial pra preencher o take de 10s)
-  IMPORTANTE: cada take dura 10 segundos. Texto muito curto deixa silêncio sobrando.
+- Cada voiceText: ~35-45 palavras (≈12-14s de fala natural em PT-BR coloquial pra preencher o take de 15s)
+  IMPORTANTE: cada take dura 15 segundos. Texto muito curto deixa silêncio sobrando. Texto muito longo é truncado no final.
 
 🎤 FORMATO TIKTOK FALADO (regras OBRIGATÓRIAS — Plano v4):
 - Frases QUEBRADAS em blocos de 4-8 palavras (separadas por "..." ou "—")
@@ -282,10 +305,10 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
   ❌ "ISSO AQUI É MUITO BOM" (CAPS demais)
 - 2-4 audio tags POR voiceText (era 1-2 — agora MAIS)
   ✅ "[gasps] [excited] Olha isso, gente! [softly] sério, viu... [confident] dá uma olhada"
-- Estrutura INTRATAKE (cada take de 10s):
-  * 0-2s: entrada/hesitação ("eita", "olha", "pera aí")
-  * 2-7s: ação CAPS (palavra-chave do produto/benefício)
-  * 7-10s: gancho pro próximo take ("agora vem o melhor", "mas espera")
+- Estrutura INTRATAKE (cada take de 15s):
+  * 0-3s: entrada/hesitação ("eita", "olha", "pera aí")
+  * 3-11s: ação CAPS (palavra-chave do produto/benefício)
+  * 11-15s: gancho pro próximo take ("agora vem o melhor", "mas espera")
 - Texto deve REAGIR ao que aparece visualmente. Antecipa, comenta, reage.
 - ❌ ZERO frase explicativa formal estilo "produto possui acabamento premium",
      "este item oferece", "vamos analisar". É CONVERSA, não anúncio.
@@ -313,7 +336,7 @@ Vibe TikTok autêntica, NUNCA propaganda formal.
 
 TIPO POV: ${typeDesc}
 ESTILO DE CÂMERA: ${styleDesc}
-DURAÇÃO: ${durationId} (${totalTakes} takes de 10s cada, concatenados sem transição)
+DURAÇÃO: ${durationId} (${totalTakes} takes de 15s cada, concatenados sem transição)
 
 ${audioModeBlock}
 
