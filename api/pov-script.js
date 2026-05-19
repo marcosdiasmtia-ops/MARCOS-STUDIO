@@ -1,4 +1,20 @@
-// api/pov-script.js (v3.0 — recalibra voiceText pra slot de 15s do Kling v3 Standard)
+// api/pov-script.js (v3.1 — fix: DURATION_CONFIG alinhado com pov-durations.js v2.0)
+//
+// CHANGELOG v3.1 (18/05/2026 — HOTFIX):
+//   🐛 FIX BUG INTRODUZIDO NA v3.0:
+//      A constante interna DURATION_CONFIG ainda tinha os ids antigos
+//      ('20s', '40s') e os counts de takes antigos ('30s': 3, '60s': 6).
+//      Resultado: frontend novo pedia '30s' (= 2 takes), backend gerava
+//      3 takes, PovOutput dava throw "Roteiro retornou 3 takes, esperado 2".
+//
+//      Fix: DURATION_CONFIG agora bate 1:1 com src/data/pov-durations.js v2.0:
+//        '15s' → 1 take · '30s' → 2 takes · '45s' → 3 takes · '60s' → 4 takes
+//      Mensagem de erro da validação e comentário do schema também atualizados.
+//
+//      Lição: duplicação entre data file e backend é frágil. Idealmente o
+//      backend deveria importar de pov-durations.js (mas como é Node em
+//      Vercel serverless e o data file é ESM frontend, não dá direto).
+//      Refator futuro: extrair pra api/_shared/pov-durations.js.
 //
 // CHANGELOG v3.0 (18/05/2026):
 //   🆕 RECALIBRA voiceText pra 35-45 palavras (≈12-14s de fala PT-BR)
@@ -82,7 +98,7 @@
 //     typeId: string,                        // de pov-types.js (22 ids válidos)
 //     scenarioId: string,                    // de pov-scenarios.js
 //     styleId: string,                       // de pov-styles.js
-//     durationId: '20s' | '30s' | '40s' | '60s',
+//     durationId: '15s' | '30s' | '45s' | '60s',
 //     audioMode: 'silent' | 'voiced',
 //     voiceId?: string,                      // só se audioMode='voiced'
 //     intensityId?: string,                  // 🆕 só se audioMode='voiced' (9 ids válidos)
@@ -110,11 +126,12 @@
 // ════════════════════════════════════════════════════════════════════════
 
 // durationId → { takes, hookCount, demoMin, demoMax, ctaCount }
+// v3.1 (18/05/2026): alinhado com pov-durations.js v2.0 (Kling v3 Standard 15s).
 const DURATION_CONFIG = {
-  '20s': { takes: 2, hookCount: 1, demoMin: 0, demoMax: 1, ctaCount: 1 },
-  '30s': { takes: 3, hookCount: 1, demoMin: 1, demoMax: 1, ctaCount: 1 },
-  '40s': { takes: 4, hookCount: 1, demoMin: 1, demoMax: 2, ctaCount: 1 },
-  '60s': { takes: 6, hookCount: 1, demoMin: 2, demoMax: 3, ctaCount: 1 },
+  '15s': { takes: 1, hookCount: 1, demoMin: 0, demoMax: 0, ctaCount: 1 },
+  '30s': { takes: 2, hookCount: 1, demoMin: 0, demoMax: 1, ctaCount: 1 },
+  '45s': { takes: 3, hookCount: 1, demoMin: 1, demoMax: 1, ctaCount: 1 },
+  '60s': { takes: 4, hookCount: 1, demoMin: 1, demoMax: 2, ctaCount: 1 },
 };
 
 const VALID_AUDIO_MODES = ['silent', 'voiced'];
@@ -243,7 +260,7 @@ export default async function handler(req, res) {
     if (!scenarioId) return res.status(400).json({ error: 'scenarioId is required' });
     if (!styleId) return res.status(400).json({ error: 'styleId is required' });
     if (!DURATION_CONFIG[durationId]) {
-      return res.status(400).json({ error: 'durationId must be 20s | 30s | 40s | 60s' });
+      return res.status(400).json({ error: 'durationId must be 15s | 30s | 45s | 60s' });
     }
     if (!VALID_AUDIO_MODES.includes(audioMode)) {
       return res.status(400).json({ error: 'audioMode must be "silent" or "voiced"' });
