@@ -1,4 +1,28 @@
-// api/pov-compose-final.js (v1.1 — compose final POV via FFmpeg API do fal.ai)
+// api/pov-compose-final.js (v1.2 — default takeDurationSeconds = 15 pra Kling v3)
+//
+// CHANGELOG v1.2 (18/05/2026):
+//   🆕 DEFAULT takeDurationSeconds = 15 (era 10 na v1.1)
+//      Motivo: parte da migração POV pra Kling v3 Standard 15s.
+//      O slot por take agora é 15s (era 10s no Kling 2.6 Pro), o que
+//      acomoda áudios PT-BR de 30-45 palavras sem estourar — fix definitivo
+//      do "freeze frame no final" reportado pós-migração de vozes BR (13/05).
+//
+//   📌 Retrocompat 100%:
+//      - Frontend pode continuar mandando takeDurationSeconds: 10 sem erro.
+//      - A validação aceita qualquer valor entre 0-60.
+//      - Quando o PovOutput v3.0 for deployado (arquivo 6), ele vai mandar
+//        explicitamente takeDurationSeconds: 15.
+//      - Entre os deploys, o sistema funciona normalmente com slot de 10s
+//        (mesmo comportamento da v1.1).
+//
+//   📌 Modo SILENT inalterado:
+//      - Continua usando fal-ai/ffmpeg-api/merge-videos (concat puro).
+//      - takeDurationSeconds não é usado em modo silent.
+//
+//   📌 Modo VOICED:
+//      - keyframes de vídeo: timestamp = i * 15000ms, duration = 15000ms
+//      - keyframes de áudio: idem
+//      - Resultado: vídeo final = N * 15s, com áudio sincronizado por take.
 //
 // CHANGELOG v1.1 (10/05/2026) — FIX MODO VOICED:
 //   - Modo voiced REESCRITO usando `fal-ai/ffmpeg-api/compose` com tracks +
@@ -29,19 +53,20 @@
 //   1 chamada apenas, stage='start' COM audioUrls (mesmo número de videoUrls).
 //   Endpoint: fal-ai/ffmpeg-api/compose
 //   2 tracks:
-//     - Track video: cada vídeo com timestamp = i*10000ms, duration = 10000ms
-//     - Track audio: cada áudio com timestamp = i*10000ms, duration = 10000ms
-//       (Se áudio é < 10s, vídeo continua rodando com silêncio. Se áudio é
-//        ≥10s, fal.ai trunca pra duração do keyframe.)
+//     - Track video: cada vídeo com timestamp = i*takeDuration_ms, duration = takeDuration_ms
+//     - Track audio: cada áudio com timestamp = i*takeDuration_ms, duration = takeDuration_ms
+//       (Se áudio é < takeDuration, vídeo continua rodando com silêncio.
+//        Se áudio é ≥ takeDuration, fal.ai trunca pra duração do keyframe.)
 //
 // REQUEST:
 //   POST /api/pov-compose-final
 //   Body: {
-//     stage?: 'start',         // só 'start' aceito na v1.1 (default)
+//     stage?: 'start',         // só 'start' aceito na v1.1+ (default)
 //     videoUrls: string[],     // sempre obrigatório, na ordem dos takes
 //     audioUrls?: string[],    // OPCIONAL. Se presente, ativa modo voiced.
 //                              // Tem que ter o mesmo comprimento de videoUrls.
-//     takeDurationSeconds?: number, // default 10 (Kling)
+//     takeDurationSeconds?: number, // default 15 (Kling v3 Standard).
+//                                   // Aceita 0-60. Use 10 pra compat com Kling 2.6.
 //   }
 //
 // RESPONSE 202:
@@ -59,10 +84,14 @@
 const FFMPEG_MERGE_VIDEOS_ENDPOINT = 'fal-ai/ffmpeg-api/merge-videos';
 const FFMPEG_COMPOSE_ENDPOINT = 'fal-ai/ffmpeg-api/compose';
 
-// stages legadas (modo voiced antigo) — rejeitadas na v1.1
+// stages legadas (modo voiced antigo) — rejeitadas desde v1.1
 const LEGACY_VOICED_STAGES = ['merge-audios', 'merge-final'];
 
 const VALID_STAGES = ['start'];
+
+// Default por take em segundos.
+// v1.2 (18/05/2026): bumped 10 → 15 pra alinhar com Kling v3 Standard.
+const DEFAULT_TAKE_DURATION_SECONDS = 15;
 
 // ════════════════════════════════════════════════════════════════════════
 // Handler
@@ -83,7 +112,7 @@ export default async function handler(req, res) {
       stage = 'start',
       videoUrls = [],
       audioUrls = [],
-      takeDurationSeconds = 10,
+      takeDurationSeconds = DEFAULT_TAKE_DURATION_SECONDS,
     } = req.body || {};
 
     // ── Validação de stage ────────────────────────────────────────────
@@ -133,7 +162,7 @@ export default async function handler(req, res) {
     }
 
     console.log(
-      `[pov-compose-final v1.1] OK: mode=${mode}, requestId=${result.requestId}, endpoint=${result.endpoint}`
+      `[pov-compose-final v1.2] OK: mode=${mode}, takeDur=${takeDurationSeconds}s, requestId=${result.requestId}, endpoint=${result.endpoint}`
     );
 
     return res.status(202).json({
@@ -142,23 +171,23 @@ export default async function handler(req, res) {
       statusUrl: result.statusUrl,
       responseUrl: result.responseUrl,
       stage: 'start',
-      nextStage: null, // sempre null na v1.1 (1 chamada só)
+      nextStage: null, // sempre null desde v1.1 (1 chamada só)
       done: true,
       mode: mode,
     });
   } catch (error) {
-    console.error('[pov-compose-final v1.1] Error:', error);
+    console.error('[pov-compose-final v1.2] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 }
 
 // ════════════════════════════════════════════════════════════════════════
 // Modo SILENT — concat dos vídeos do Kling via merge-videos
-// (mesmo comportamento da v1.0, mantido por simplicidade e custo menor)
+// (mesmo comportamento desde v1.0, mantido por simplicidade e custo menor)
 // ════════════════════════════════════════════════════════════════════════
 
 async function composeSilent(videoUrls, FAL_KEY) {
-  console.log(`[pov-compose-final silent] Merging ${videoUrls.length} videos`);
+  console.log(`[pov-compose-final silent v1.2] Merging ${videoUrls.length} videos`);
 
   const submitData = await submitFalQueue(
     FFMPEG_MERGE_VIDEOS_ENDPOINT,
@@ -188,17 +217,20 @@ async function composeSilent(videoUrls, FAL_KEY) {
 //     }
 //   ]
 //
-// Estratégia: cada take ocupa um slot de takeDurationSeconds (10s default).
-// Vídeo do take i: timestamp = i * 10000ms, duration = 10000ms
-// Áudio do take i: timestamp = i * 10000ms, duration = 10000ms
-//   (Se áudio é < 10s, fal.ai pad com silêncio. Se ≥ 10s, trunca.)
+// Estratégia: cada take ocupa um slot de takeDurationSeconds (15s default na v1.2).
+// Vídeo do take i: timestamp = i * takeDuration_ms, duration = takeDuration_ms
+// Áudio do take i: timestamp = i * takeDuration_ms, duration = takeDuration_ms
+//   (Se áudio é < slot, fal.ai pad com silêncio. Se ≥ slot, trunca.)
 //
-// Resultado: vídeo final tem N * 10s de duração, áudio sincronizado por take.
+// Resultado: vídeo final tem N * takeDurationSeconds de duração, áudio
+// sincronizado por take.
 // ════════════════════════════════════════════════════════════════════════
 
 async function composeVoiced(videoUrls, audioUrls, takeDurationSeconds, FAL_KEY) {
   const durationMs = takeDurationSeconds * 1000;
-  console.log(`[pov-compose-final voiced] Composing ${videoUrls.length} takes (${takeDurationSeconds}s each)`);
+  console.log(
+    `[pov-compose-final voiced v1.2] Composing ${videoUrls.length} takes (${takeDurationSeconds}s each)`
+  );
 
   const videoKeyframes = videoUrls.map((url, i) => ({
     url,
@@ -257,7 +289,10 @@ async function submitFalQueue(endpoint, body, FAL_KEY) {
 
   if (!submitRes.ok) {
     const errText = await submitRes.text();
-    console.error(`[pov-compose-final v1.1] fal.ai submit error ${submitRes.status} (${endpoint}):`, errText.substring(0, 500));
+    console.error(
+      `[pov-compose-final v1.2] fal.ai submit error ${submitRes.status} (${endpoint}):`,
+      errText.substring(0, 500)
+    );
     return {
       error: `fal.ai retornou ${submitRes.status} ao submeter ${endpoint}`,
       details: errText.substring(0, 300),
