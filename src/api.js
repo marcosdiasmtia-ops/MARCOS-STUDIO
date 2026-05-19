@@ -2,7 +2,7 @@
 //
 // CHANGELOG:
 // v4.7 — POV Sessão 2 Lote C (2 helpers fal.ai async — fecha pipeline POV):
-//   - submitPovKlingVideo  → /api/pov-kling-generate   (Kling 2.6 Pro 1 take, async)
+//   - submitPovKlingVideo  → /api/pov-kling-generate   (Kling v3 Standard 1 take, async)
 //   - composePovFinal      → /api/pov-compose-final    (FFmpeg API stateful, 1-3 stages)
 //   * Polling reusa /api/video-status (já existe via checkVideoStatus)
 // v4.6 — POV Sessão 2 Lote B (2 helpers fal.ai síncronos):
@@ -11,7 +11,7 @@
 // v4.5 — POV Sessão 2 Lote A (3 helpers Claude API):
 //   - recommendPovDefaults    → /api/pov-recommend       (sugere typeId/scenarioId/styleId/handsId)
 //   - generatePovScript       → /api/pov-script          (roteiro N takes + descrição/hashtags/CTA)
-//   - generatePovKlingPrompts → /api/pov-kling-prompts   (N prompts em inglês pro Kling 2.6 Pro)
+//   - generatePovKlingPrompts → /api/pov-kling-prompts   (N prompts em inglês pro Kling v3 Standard)
 // v3.0 — dual-photo analyzeIdentity + facePrompt pipeline (legacy/FLUX.2 pro)
 // v4.0 — adiciona 4 helpers VTON novos:
 //   - analyzeFace          → /api/analyze-face
@@ -843,7 +843,7 @@ export async function generateUgcVeoPrompt(input) {
 
 // ════════════════════════════════════════════════════════════════════════
 // v4.5 — POV Sessão 2 Lote A (3 helpers Claude API)
-// Sugere defaults, gera roteiro e prompts pro Kling 2.6 Pro.
+// Sugere defaults, gera roteiro e prompts pro Kling v3 Standard.
 // Backend: api/pov-recommend.js, api/pov-script.js, api/pov-kling-prompts.js
 // ════════════════════════════════════════════════════════════════════════
 
@@ -923,7 +923,7 @@ export async function generatePovScript(input) {
 }
 
 /**
- * Gera N prompts em inglês pro Kling 2.6 Pro animar cada take.
+ * Gera N prompts em inglês pro Kling v3 Standard animar cada take.
  *
  * @param {Object} input
  * @param {Array}  input.script       — saída do generatePovScript
@@ -1033,13 +1033,13 @@ export async function generatePovTTS(input) {
 
 // ════════════════════════════════════════════════════════════════════════
 // v4.7 — POV Sessão 2 Lote C (2 helpers fal.ai async — fecha pipeline POV)
-// Geração de vídeo Kling 2.6 Pro e composição final via FFmpeg API.
+// Geração de vídeo Kling v3 Standard e composição final via FFmpeg API.
 // Backend: api/pov-kling-generate.js, api/pov-compose-final.js
 // Polling: reusa checkVideoStatus (já existente, /api/video-status)
 // ════════════════════════════════════════════════════════════════════════
 
 /**
- * Submete UM vídeo Kling 2.6 Pro pra UM take POV. NÃO aguarda conclusão.
+ * Submete UM vídeo Kling v3 Standard pra UM take POV. NÃO aguarda conclusão.
  * Retorna 202 com requestId/URLs pro frontend fazer polling via
  * checkVideoStatus(requestId, endpoint, statusUrl, responseUrl).
  *
