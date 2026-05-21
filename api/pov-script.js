@@ -1,4 +1,28 @@
-// api/pov-script.js (v3.3 — ajuste fino: 30-35 palavras pra eliminar silêncio final)
+// api/pov-script.js (v3.4 — calibração empírica + diretrizes de qualidade narrativa)
+//
+// CHANGELOG v3.4 (18/05/2026 — refinamento com referência empírica externa):
+//   🎯 CALIBRAÇÃO PALAVRAS×TEMPO baseada em referência empírica trazida
+//      pelo Marcos: 34-40 palavras = 14-15s em speed 1.0 (vozes BR
+//      ElevenLabs). Com speed 1.08 (mantido), vira ~13-14s, deixando 1-2s
+//      de respiração natural no slot de 15s. Substitui as estimativas
+//      anteriores (v3.3: 30-35 palavras gerou silêncio sobrando).
+//
+//   🆕 ESTRUTURA INTRATAKE realinhada com referência do TikTok POV:
+//      Antes: 0-2s entrada / 2-10s ação CAPS / 10-13s gancho / 13-15s respiro
+//      Agora: 0-4s GANCHO / 4-11s DEMO/BENEFÍCIO / 11-14s CTA / 14-15s respiro
+//      (gancho mais longo prende viewer mute, CTA curto entrega ação)
+//
+//   🆕 NOVO BLOCO "QUALIDADE DA NARRAÇÃO" no system prompt — diretrizes
+//      pro ElevenLabs PT-BR soar NATURAL (não como anúncio escrito):
+//        - Escreve como alguém fala, não como anúncio
+//        - Frases curtas com vírgulas reais de respiração
+//        - Evita números seguidos sem pausa
+//        - Números redondos naturalmente ("cento e setenta" vs "169,99")
+//        - Pontuação que respira (vírgula/ponto/reticências bem usadas)
+//        - 1 informação por frase
+//      Cada regra tem exemplo ✅/❌ pro Claude calibrar bem.
+//
+//   📌 Retrocompat 100%: schema de input/output inalterado.
 //
 // CHANGELOG v3.3 (18/05/2026 — ajuste fino pós-validação Parte B):
 //   🎯 AJUSTE FINO do voiceText: 26-32 palavras → 30-35 palavras.
@@ -341,9 +365,9 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
 - TOTAL de frases on-screen: ${config.hookCount + config.demoMin + config.ctaCount} a ${config.hookCount + config.demoMax + config.ctaCount}`
       : `MODO DE ÁUDIO: VOICED (narração off com voz "${voiceId}" do Eleven v3)
 - voiceText DEVE estar PREENCHIDO em TODOS os ${totalTakes} takes
-- Cada voiceText: ~30-35 palavras (≈12-13s de fala natural em PT-BR coloquial com speed 1.08 no TTS)
+- Cada voiceText: ~34-40 palavras (≈13-14s de fala natural em PT-BR coloquial com speed 1.08 no TTS)
   IMPORTANTE: cada take dura 15 segundos. Texto muito curto deixa silêncio sobrando. Texto muito longo é truncado ou estende o vídeo congelado.
-  CALIBRAÇÃO: vozes BR (ElevenLabs PT-BR nativas) com speed 1.08 falam 30-35 palavras em ~12-13s real, deixando margem natural de 2-3s no slot (respiração entre takes, não silêncio percebido).
+  CALIBRAÇÃO EMPÍRICA: validado em produção que 34-40 palavras × speed 1.08 = ~13-14s reais em vozes BR ElevenLabs, deixando margem de 1-2s no slot (respiração natural, não silêncio percebido).
 
 🎤 FORMATO TIKTOK FALADO (regras OBRIGATÓRIAS — Plano v4):
 - Frases QUEBRADAS em blocos de 4-8 palavras (separadas por "..." ou "—")
@@ -356,14 +380,34 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
   ❌ "ISSO AQUI É MUITO BOM" (CAPS demais)
 - 2-4 audio tags POR voiceText (era 1-2 — agora MAIS)
   ✅ "[gasps] [excited] Olha isso, gente! [softly] sério, viu... [confident] dá uma olhada"
-- Estrutura INTRATAKE (cada take de 15s, fala ocupa ~12-13s + ~2-3s de respiração):
-  * 0-2s: entrada/hesitação ("eita", "olha", "pera aí")
-  * 2-10s: ação CAPS (palavra-chave do produto/benefício)
-  * 10-13s: gancho pro próximo take ("agora vem o melhor", "mas espera")
-  * 13-15s: respiração natural (microsilêncio antes do próximo take)
+- Estrutura INTRATAKE (cada take de 15s, fala ocupa ~13-14s + ~1-2s de respiração):
+  * 0-4s: GANCHO curto (reação/hesitação + chamada que prende — "cara, olha isso", "eita, viu", "pera aí")
+  * 4-11s: DEMONSTRAÇÃO/BENEFÍCIO (palavra-chave em CAPS, característica concreta do produto)
+  * 11-14s: CTA curto ("agora vem o melhor", "tá saindo por...", "olha o preço")
+  * 14-15s: respiração natural (microsilêncio antes do próximo take)
 - Texto deve REAGIR ao que aparece visualmente. Antecipa, comenta, reage.
 - ❌ ZERO frase explicativa formal estilo "produto possui acabamento premium",
      "este item oferece", "vamos analisar". É CONVERSA, não anúncio.
+
+🗣️ QUALIDADE DA NARRAÇÃO (regras OBRIGATÓRIAS — pra voz soar NATURAL no ElevenLabs):
+- ESCREVA COMO ALGUÉM FALA, NÃO COMO ANÚNCIO ESCRITO.
+  ✅ "Cara, olha só. Essa parafusadeira aqui... arranca parafuso enferrujado sem esforço."
+  ❌ "Apresentamos a parafusadeira brushless com torque superior."
+- FRASES CURTAS, com vírgulas reais de respiração — o ElevenLabs RESPEITA pontuação.
+  ✅ "Olha, isso aqui é absurdo. Sério, viu. Vem com duas baterias e maleta completa."
+  ❌ "Esse produto possui duas baterias e maleta completa com torque absurdo de quatrocentos e cinquenta newton metro."
+- EVITE números seguidos sem pausa. Quebre com vírgulas ou palavras de quebra.
+  ✅ "Tem torque de 450 newton, viu. E vem com duas baterias."
+  ❌ "Torque de 450NM com 48V e 2 baterias e 12 acessórios."
+- NÚMEROS REDONDOS NATURALMENTE. Prefere "menos de cento e setenta" a "169,99".
+  ✅ "Tá saindo por menos de cento e setenta"
+  ❌ "Por apenas R$ 169,99"
+- USE pontuação que respira: vírgulas pra pausa curta, ponto pra pausa longa, "..." pra hesitação.
+  ✅ "Cara... olha isso. Sério, viu. Tá absurdo."
+  ❌ "Cara olha isso sério viu ta absurdo"
+- 1 informação concentrada por frase, NUNCA várias coladas.
+  ✅ "Torque absurdo. E o melhor? Bateria dura horas."
+  ❌ "Torque absurdo e bateria que dura horas e ainda vem com maleta e acessórios."
 
 - onScreenPhrases COMPLEMENTAM o áudio (não duplicam):
   * Hook: 1 frase no take 1 (gancho visual curto)
