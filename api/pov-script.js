@@ -1,4 +1,20 @@
-// api/pov-script.js (v3.2 — recalibra voiceText pra 26-32 palavras após validação em produção)
+// api/pov-script.js (v3.3 — ajuste fino: 30-35 palavras pra eliminar silêncio final)
+//
+// CHANGELOG v3.3 (18/05/2026 — ajuste fino pós-validação Parte B):
+//   🎯 AJUSTE FINO do voiceText: 26-32 palavras → 30-35 palavras.
+//      v3.2 + speed 1.08 (Parte B) resolveu o freeze frame mas inverteu
+//      o problema: smoke test gerou áudio total de 24s pra 30s de vídeo
+//      (6s silêncio final). Encurtamos roteiro 30% E aceleramos 8% — pressão
+//      demais combinada.
+//
+//      v3.3 sobe pra 30-35 palavras (~12-13s real com speed 1.08), deixando
+//      margem de 2-3s no slot que vira respiração natural entre takes, não
+//      silêncio percebido. Speed 1.08 mantido (validado como natural no teste).
+//
+//   📌 Estrutura INTRATAKE re-escalada:
+//      0-2s entrada / 2-10s ação CAPS / 10-13s gancho / 13-15s respiração
+//
+//   📌 Retrocompat 100%: schema de input/output inalterado.
 //
 // CHANGELOG v3.2 (18/05/2026 — fix pós-smoke-test):
 //   🐛 RECALIBRAÇÃO empírica do voiceText após teste em produção:
@@ -325,9 +341,9 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
 - TOTAL de frases on-screen: ${config.hookCount + config.demoMin + config.ctaCount} a ${config.hookCount + config.demoMax + config.ctaCount}`
       : `MODO DE ÁUDIO: VOICED (narração off com voz "${voiceId}" do Eleven v3)
 - voiceText DEVE estar PREENCHIDO em TODOS os ${totalTakes} takes
-- Cada voiceText: ~26-32 palavras (≈10-12s de fala natural em PT-BR coloquial pra preencher o take de 15s)
+- Cada voiceText: ~30-35 palavras (≈12-13s de fala natural em PT-BR coloquial com speed 1.08 no TTS)
   IMPORTANTE: cada take dura 15 segundos. Texto muito curto deixa silêncio sobrando. Texto muito longo é truncado ou estende o vídeo congelado.
-  CALIBRAÇÃO: vozes BR (ElevenLabs PT-BR nativas) falam ~50-60% mais devagar que vozes anglo. 26-32 palavras = ~10-12s real, deixando margem de segurança de 3-5s no slot.
+  CALIBRAÇÃO: vozes BR (ElevenLabs PT-BR nativas) com speed 1.08 falam 30-35 palavras em ~12-13s real, deixando margem natural de 2-3s no slot (respiração entre takes, não silêncio percebido).
 
 🎤 FORMATO TIKTOK FALADO (regras OBRIGATÓRIAS — Plano v4):
 - Frases QUEBRADAS em blocos de 4-8 palavras (separadas por "..." ou "—")
@@ -340,11 +356,11 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
   ❌ "ISSO AQUI É MUITO BOM" (CAPS demais)
 - 2-4 audio tags POR voiceText (era 1-2 — agora MAIS)
   ✅ "[gasps] [excited] Olha isso, gente! [softly] sério, viu... [confident] dá uma olhada"
-- Estrutura INTRATAKE (cada take de 15s, fala ocupa ~10-12s + ~3s de respiração):
+- Estrutura INTRATAKE (cada take de 15s, fala ocupa ~12-13s + ~2-3s de respiração):
   * 0-2s: entrada/hesitação ("eita", "olha", "pera aí")
-  * 2-9s: ação CAPS (palavra-chave do produto/benefício)
-  * 9-12s: gancho pro próximo take ("agora vem o melhor", "mas espera")
-  * 12-15s: respiração natural (microsilêncio antes do próximo take)
+  * 2-10s: ação CAPS (palavra-chave do produto/benefício)
+  * 10-13s: gancho pro próximo take ("agora vem o melhor", "mas espera")
+  * 13-15s: respiração natural (microsilêncio antes do próximo take)
 - Texto deve REAGIR ao que aparece visualmente. Antecipa, comenta, reage.
 - ❌ ZERO frase explicativa formal estilo "produto possui acabamento premium",
      "este item oferece", "vamos analisar". É CONVERSA, não anúncio.
