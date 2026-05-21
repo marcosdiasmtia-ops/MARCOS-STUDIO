@@ -1,4 +1,18 @@
-// src/PovOutput.jsx (v3.0 — migra POV pra Kling v3 Standard 15s/take)
+// src/PovOutput.jsx (v3.1 — speed 1.08 no TTS pra reduzir overflow em vozes BR)
+//
+// CHANGELOG v3.1 (18/05/2026 — fix pós-smoke-test, Parte B):
+//   🐛 ADICIONA speed: 1.08 na chamada generatePovTTS.
+//      Vozes BR (ElevenLabs PT-BR nativas) falam ~50-60% mais devagar que
+//      vozes anglo, gerando overflow no slot do Kling. Smoke test em prod
+//      gerou vídeo 30s + áudio 39s (9s de freeze frame final).
+//
+//      speed: 1.08 acelera 8% — imperceptível ao ouvido humano (limite
+//      natural fica em 1.15+), mas reduz cada áudio em ~1.5s. Combinado
+//      com pov-script v3.2 (voiceText 26-32 palavras em vez de 35-45),
+//      garante áudio cabendo dentro do slot de 15s do Kling v3 Standard.
+//
+//      ElevenLabs endpoint já aceitava speed (default 1.0, range 0.7-1.2)
+//      desde a v1.0 — só não tava sendo passado.
 //
 // CHANGELOG v3.0 (18/05/2026):
 //   🆕 MIGRAÇÃO PRA KLING V3 STANDARD 15s — peça final do pacote:
@@ -398,6 +412,7 @@ export default function PovOutput({ wizardData, onStartNew }) {
               const result = await generatePovTTS({
                 text: take.voiceText,
                 voiceId: wizardData.voiceId,
+                speed: 1.08, // v3.1: acelera 8% pra reduzir overflow em vozes BR lentas (combo com pov-script v3.2)
                 takeNumber: tn,
               });
               updateTake(tn, { audioStatus: 'done', audioUrl: result.audioUrl });
