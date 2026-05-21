@@ -1,4 +1,29 @@
-// api/pov-script.js (v3.4 — calibração empírica + diretrizes de qualidade narrativa)
+// api/pov-script.js (v3.5 — target em CARACTERES + audio tags reduzidas)
+//
+// CHANGELOG v3.5 (18/05/2026 — abandono da métrica de palavras):
+//   🎯 MUDANÇA FUNDAMENTAL: target do voiceText sai de "palavras" pra
+//      "CARACTERES" (~230-250 chars incluindo pontuação + audio tags).
+//
+//      MOTIVO: 4 versões consecutivas (v3.1 → v3.4) erraram a calibração
+//      porque "palavras" engana — a duração real do TTS depende de
+//      caracteres totais (incluindo pontuação que vira pausa + audio tags
+//      que viram modulação). Dados empíricos da v3.3 vs v3.4:
+//        v3.3: 32 palavras / pontuação simples / 2 tags = ~12s áudio
+//        v3.4: 37 palavras / pontuação extensa / 3 tags = ~19s áudio
+//      Mesmo "palavra média" inflou 60% em duração só por causa de
+//      pontuação + tags. Referência oficial ElevenLabs: 1000 chars/min
+//      em speed 1.0. Com speed 1.08, 230-250 chars = ~13-14s no slot 15s.
+//
+//   🎯 AUDIO TAGS REDUZIDAS: 2-4 por voiceText → 1-2 por voiceText.
+//      Cada audio tag ([excited], [softly], [gasps]) adiciona ~0.5-1s de
+//      pausa/modulação no TTS. 3-4 tags por take somam 2-4s de overflow.
+//      1-2 tags mantêm expressividade sem estourar slot.
+//
+//   📌 Mantém: speed 1.08 (validado natural), estrutura intratake do v3.4
+//      (gancho 4s + demo 7s + CTA 3s + 1s respiração), regras de qualidade
+//      narrativa (escrever como fala, vírgulas reais, números redondos).
+//
+//   📌 Retrocompat 100%: schema de input/output inalterado.
 //
 // CHANGELOG v3.4 (18/05/2026 — refinamento com referência empírica externa):
 //   🎯 CALIBRAÇÃO PALAVRAS×TEMPO baseada em referência empírica trazida
@@ -365,9 +390,11 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
 - TOTAL de frases on-screen: ${config.hookCount + config.demoMin + config.ctaCount} a ${config.hookCount + config.demoMax + config.ctaCount}`
       : `MODO DE ÁUDIO: VOICED (narração off com voz "${voiceId}" do Eleven v3)
 - voiceText DEVE estar PREENCHIDO em TODOS os ${totalTakes} takes
-- Cada voiceText: ~34-40 palavras (≈13-14s de fala natural em PT-BR coloquial com speed 1.08 no TTS)
-  IMPORTANTE: cada take dura 15 segundos. Texto muito curto deixa silêncio sobrando. Texto muito longo é truncado ou estende o vídeo congelado.
-  CALIBRAÇÃO EMPÍRICA: validado em produção que 34-40 palavras × speed 1.08 = ~13-14s reais em vozes BR ElevenLabs, deixando margem de 1-2s no slot (respiração natural, não silêncio percebido).
+- Cada voiceText: ~230-250 CARACTERES totais (incluindo pontuação, espaços e audio tags)
+  IMPORTANTE: o ElevenLabs cobra e mede em CARACTERES, não palavras (referência oficial: 1000 chars/min em speed 1.0).
+  Com speed 1.08, 230-250 caracteres ≈ 13-14s de áudio real, deixando 1-2s de respiração no slot de 15s.
+  CRÍTICO: conte tudo — letras, vírgulas, pontos, espaços, audio tags como "[excited]". Pontuação e audio tags ADICIONAM tempo de áudio (pausas, modulação), por isso entram na contagem.
+  CALIBRAÇÃO EMPÍRICA: validado em produção. 32 palavras com pontuação simples = ~12s (silêncio sobrou). 37 palavras com pontuação extensa e 3 audio tags = ~19s (estourou). Medir em caracteres elimina essa variabilidade.
 
 🎤 FORMATO TIKTOK FALADO (regras OBRIGATÓRIAS — Plano v4):
 - Frases QUEBRADAS em blocos de 4-8 palavras (separadas por "..." ou "—")
@@ -378,8 +405,10 @@ ${INTENSITY_SPEECH_STYLES[finalIntensityId]}
   ✅ "isso aqui é MUITO bom"
   ✅ "VAI ACABAR rápido"
   ❌ "ISSO AQUI É MUITO BOM" (CAPS demais)
-- 2-4 audio tags POR voiceText (era 1-2 — agora MAIS)
-  ✅ "[gasps] [excited] Olha isso, gente! [softly] sério, viu... [confident] dá uma olhada"
+- 1-2 audio tags POR voiceText (REDUZIDO de 2-4 na v3.5 — cada tag adiciona ~0.5-1s de pausa/modulação no TTS, estourando o slot)
+  ✅ "[excited] Olha isso, gente! Sério, viu... dá uma olhada"
+  ✅ "[gasps] Cara... isso aqui é absurdo. Não tô brincando."
+  ❌ "[gasps] [excited] Olha! [softly] sério... [confident] olha aí" (4 tags = +3s de pausas = estoura)
 - Estrutura INTRATAKE (cada take de 15s, fala ocupa ~13-14s + ~1-2s de respiração):
   * 0-4s: GANCHO curto (reação/hesitação + chamada que prende — "cara, olha isso", "eita, viu", "pera aí")
   * 4-11s: DEMONSTRAÇÃO/BENEFÍCIO (palavra-chave em CAPS, característica concreta do produto)
