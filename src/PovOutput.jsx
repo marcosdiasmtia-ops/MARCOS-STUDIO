@@ -1,4 +1,31 @@
-// src/PovOutput.jsx (v3.1 — speed 1.08 no TTS pra reduzir overflow em vozes BR)
+// src/PovOutput.jsx (v3.2 — fix galeria: salvamento robusto + sem base64 vazando)
+//
+// CHANGELOG v3.2 (23/05/2026 — fix "POV some da galeria depois de uns 8"):
+//   🐛 CAUSA RAIZ: o /api/upload NÃO faz upload real pro fal.ai — ele só
+//      converte o base64 numa data URI ("data:image/...;base64,...") e
+//      devolve isso como se fosse uma "url". Logo, productPhotoUrl chegava
+//      aqui como base64 disfarçado de link (~140 KB) e era salvo no entry da
+//      galeria. pickSerializable não pegava (campo não tem "Base64" no nome).
+//      Resultado: cada POV pesava 63-143 KB, entupia o localStorage (junto
+//      com as chaves VTON/UGC) e, ao estourar a quota, o save FALHAVA CALADO
+//      (console.warn engolido) — o POV sumia sem aparecer na galeria nem na
+//      busca.
+//
+//   ✅ FIX 1 — stripDataUrls(): remove QUALQUER data URL em profundidade do
+//      entry antes de salvar. Cada POV cai de ~140 KB pra ~3 KB (só vídeo
+//      final + metadados de texto). Defensivo: pega productPhotoUrl,
+//      handsReferenceUrl e qualquer campo futuro que seja data URL.
+//   ✅ FIX 2 — savePovToGallery robusto: se o localStorage estourar, remove
+//      os POVs mais antigos e RE-TENTA, em loop. Só desiste com um alert()
+//      claro pro Marcos (nunca mais some calado).
+//   ✅ FIX 3 — mensagem amigável quando "🔁 Variar" roda sobre um POV sem a
+//      foto salva (a foto deixou de ser guardada por causa do FIX 1).
+//
+//   📌 Trade-off conhecido (decisão de 23/05): "Gerar variação" passa a pedir
+//      a foto do produto de novo, porque ela não fica mais guardada na
+//      galeria. Solução definitiva (upload REAL pro fal.ai no api/upload.js,
+//      resolvendo o peso em TODAS as abas) ficou registrada no Notion como
+//      objetivo de médio prazo.
 //
 // CHANGELOG v3.1 (18/05/2026 — fix pós-smoke-test, Parte B):
 //   🐛 ADICIONA speed: 1.08 na chamada generatePovTTS.
@@ -305,7 +332,12 @@ export default function PovOutput({ wizardData, onStartNew }) {
       if (!productPhotoUrl) {
         setStatusMessage('📤 Enviando produto pra fal.ai...');
         if (!wizardData.productPhotoBase64) {
-          throw new Error('Sem foto do produto: nem URL nem base64 fornecidos. Volte ao wizard e faça upload.');
+          // v3.2: este caso acontece numa "🔁 Variar" sobre um POV antigo —
+          // a foto não fica mais guardada na galeria (ver FIX 1 no cabeçalho).
+          throw new Error(
+            'Pra gerar uma variação eu preciso da foto do produto de novo — ela não fica guardada na galeria (só o vídeo e os textos ficam). ' +
+            'Clique em "✨ Novo POV" e refaça subindo a foto, ou use "✏️ Editar config" na galeria e suba a foto no passo do produto.'
+          );
         }
         productPhotoUrl = await uploadToFal(
           wizardData.productPhotoBase64,
@@ -1323,17 +1355,67 @@ function pickSerializable(wizardData) {
 }
 
 function savePovToGallery(entry) {
+  // v3.2 — FIX 1: remove data URLs pesadas (base64 disfarçado de "url") antes
+  // de salvar. Ver stripDataUrls() abaixo e o changelog no topo do arquivo.
+  const limpo = stripDataUrls(entry);
   try {
     const raw = localStorage.getItem(POV_GALLERY_KEY);
-    const list = raw ? JSON.parse(raw) : [];
-    list.unshift(entry);
-    // Limita a 50 entradas
+    let list = raw ? JSON.parse(raw) : [];
+    list.unshift(limpo);
+    // Limita a 50 entradas (mais antigo sai primeiro)
     while (list.length > 50) list.pop();
-    localStorage.setItem(POV_GALLERY_KEY, JSON.stringify(list));
-    console.log('[PovOutput] salvo na galeria:', entry.id);
+
+    // v3.2 — FIX 2: salvamento robusto. Se o localStorage estourar (quota
+    // cheia — ex.: abas VTON/UGC ocupando espaço), NÃO falha calado: remove
+    // os POVs mais antigos e re-tenta. Só desiste, com aviso CLARO, se nem o
+    // POV novo sozinho couber.
+    let salvou = false;
+    while (!salvou) {
+      try {
+        localStorage.setItem(POV_GALLERY_KEY, JSON.stringify(list));
+        salvou = true;
+      } catch (quotaErr) {
+        if (list.length > 1) {
+          list.pop(); // descarta o POV mais antigo e tenta de novo
+          console.warn('[PovOutput] localStorage cheio — removendo POV antigo e re-tentando. Restam:', list.length);
+        } else {
+          console.error('[PovOutput] localStorage cheio mesmo após limpar a galeria POV:', quotaErr);
+          alert(
+            '⚠️ Não consegui salvar o POV na galeria: o armazenamento do navegador está cheio.\n\n' +
+            'O vídeo foi gerado normalmente — use os links e botões nesta tela pra baixar.\n\n' +
+            'Pra liberar espaço: as abas VTON / UGC Falante / Studio Legacy costumam guardar fotos pesadas de cadastros antigos. ' +
+            'Apagar cadastros que você não usa mais resolve.'
+          );
+          return;
+        }
+      }
+    }
+    console.log('[PovOutput] salvo na galeria:', limpo.id, '— total na galeria:', list.length);
   } catch (err) {
     console.warn('[PovOutput] erro salvando na galeria:', err);
   }
+}
+
+// v3.2 — FIX 1: remove QUALQUER data URL (base64 disfarçado de "url") em
+// profundidade. O /api/upload retorna data URIs em vez de links http reais,
+// então campos como productPhotoUrl/handsReferenceUrl chegam como
+// "data:image/...;base64,..." pesando 100-150 KB cada. Guardar isso na galeria
+// entupia o localStorage (bug do "POV some depois de uns 8"). Aqui trocamos
+// toda data URL por null — o vídeo final + metadados de texto continuam
+// salvos; só a foto-fonte pesada é descartada.
+function stripDataUrls(value) {
+  if (typeof value === 'string') {
+    return value.startsWith('data:') ? null : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripDataUrls);
+  }
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k in value) out[k] = stripDataUrls(value[k]);
+    return out;
+  }
+  return value;
 }
 
 function formatTime(seconds) {
