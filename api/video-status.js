@@ -1,8 +1,20 @@
 // Poll video generation status using fal.ai provided URLs
+//
+// CHANGELOG vFix-status1:
+//   🐛 CAUSA do "timeout falso": o Vercel estava CACHEANDO as respostas deste
+//      endpoint (todas voltavam 304 Not Modified). Resultado: o app recebia
+//      sempre a resposta velha ("em progresso") e NUNCA enxergava o COMPLETED,
+//      mesmo quando o Kling já tinha terminado o vídeo → estourava os 450s.
+//   ✅ FIX: headers Cache-Control: no-store (+ variações de CDN do Vercel) pra
+//      forçar resposta fresca em CADA polling. Agora o app vê o vídeo pronto.
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // vFix-status1: nunca cachear o status (cada polling precisa ser fresco).
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const FAL_KEY = process.env.FAL_KEY;
