@@ -787,12 +787,24 @@ export default function VtonStudio() {
     const bU = backUrl || backApprovedUrl;
 
     try {
+      // 🆕 vFix4: Kling v3 PRO + multi-shot (3 cenas × 5s = 15s).
+      // Arco coerente com os frames: frontal (start_image) → gira e mostra as
+      // costas (@Element1 = imagem de costas) → volta pra câmera (CTA).
+      // Se o roteiro já trouxer videoShots (gerador atualizado no arquivo 3),
+      // usa eles; senão usa este arco padrão confiável.
+      const videoShots = (Array.isArray(activeRoteiro.videoShots) && activeRoteiro.videoShots.length > 0)
+        ? activeRoteiro.videoShots
+        : [
+            { prompt: 'The woman stands naturally in the modern living room, facing the camera, calm and confident posture with subtle natural movement.', duration: '5' },
+            { prompt: 'She turns around smoothly to reveal the back of the outfit, matching @Element1 — same design, color, pattern and details of the garment seen from behind.', duration: '5' },
+            { prompt: 'She turns back toward the camera and settles into a confident pose, one hand near her hip, looking directly at the camera with a subtle natural smile.', duration: '5' },
+          ];
+
       const videoSubmit = await generateVideo({
-        engine: 'kling',
-        prompt: activeRoteiro.videoPrompt
-          || `Cinematic UGC fashion video, gentle natural movement, ending with the woman looking at camera with subtle natural smile, 15 seconds, vertical format`,
-        image_url: fU,
-        element_image_url: bU,
+        engine: 'kling-pro',
+        multi_prompt: videoShots,
+        image_url: fU,            // frontal = frame inicial (start_image_url)
+        element_image_url: bU,    // costas = elemento (@Element1)
         duration: 15,
         aspect_ratio: '9:16',
         generate_audio: false,
