@@ -1,20 +1,20 @@
 // fal.ai video generation proxy — supports Kling 3.0, Veo 3, Grok Imagine
-//https://github.com/marcosdiasmtia-ops/MARCOS-STUDIO/blob/main/api/video.js
-// CHANGELOG vFix1 (Etapa 1 — correção do bug de migração do Kling v3):
-//   🐛 CAUSA: o trecho 'kling' usava parâmetros da versão ANTIGA do Kling.
-//      O endpoint já é v3, mas o body mandava os nomes velhos, então o fal
-//      IGNORAVA a imagem e o áudio saía sem pedir. Resultado: vídeo "todo errado"
-//      (cria coisa do nada, não foca no produto, e "quer falar").
+//
+// CHANGELOG vFix2 (Etapa 2 — religa a referência do PRODUTO no Kling v3):
+//   Mantém tudo da vFix1 (start_image_url, audio off, negative anti-fala) e
+//   adiciona o uso correto da referência de produto/costas:
+//   🐛 CAUSA (parte 2): o campo antigo 'element_reference_image_url' não existe
+//      no Kling v3 → a foto do produto era descartada. Além disso, mesmo no
+//      formato novo, o fal IGNORA o elemento se o prompt não citar @Element1.
 //   ✅ FIX:
-//      1. image_url  → start_image_url   (Kling v3 i2v só lê start_image_url;
-//         com o nome certo, a imagem da influencer volta a ser o frame inicial)
-//      2. generate_audio: false fixo (a não ser que venha true explícito) +
-//         negative_prompt anti-fala → mata o "quer falar"/lip-sync indesejado
-//   ⏭️ ETAPA 2 (separada): religar a referência do produto/costas via
-//      input.elements = [{ frontal_image_url, reference_image_urls }] + @Element1
-//      no prompt. NÃO incluída aqui de propósito (mexe também no prompt e
-//      merece teste isolado). O campo antigo 'element_reference_image_url' foi
-//      removido por ser inválido no v3 (era ignorado de qualquer forma).
+//      3. element_image_url agora entra no array oficial:
+//         input.elements = [{ frontal_image_url: element_image_url }]
+//      4. Se o prompt não citar @Element1, o código injeta automaticamente uma
+//         instrução amarrando a roupa/produto ao @Element1 (senão o fal ignora).
+//
+// CHANGELOG vFix1 (Etapa 1):
+//      1. image_url → start_image_url (v3 i2v só lê start_image_url)
+//      2. generate_audio: false por padrão + negative anti-fala
 const ENDPOINTS = {
   'kling': 'fal-ai/kling-video/v3/standard/image-to-video',
   'kling-pro': 'fal-ai/kling-video/v3/pro/image-to-video',
@@ -30,6 +30,12 @@ const ENDPOINTS = {
 const KLING_NO_TALK = 'talking, speaking, mouth moving, lip sync, lip-sync, ' +
   'singing, subtitles, captions, text overlay, watermark, extra people, ' +
   'duplicate person, morphing, warping, distortion';
+
+// Instrução injetada no prompt quando há produto de referência mas o prompt
+// não cita @Element1 (sem isso o fal ignora o elemento).
+const ELEMENT_CLAUSE = ' Keep the clothing/product identical to @Element1, ' +
+  'preserving its exact design, color, pattern, print and details, including ' +
+  'the back of the garment when the person turns around.';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -55,19 +61,31 @@ export default async function handler(req, res) {
       // Junta o negative_prompt do cliente (se houver) com os termos anti-fala.
       const neg = [negative_prompt, KLING_NO_TALK].filter(Boolean).join(', ');
 
+      // Monta o prompt e a referência de produto (Etapa 2).
+      let finalPrompt = prompt || '';
+      const elements = [];
+      if (element_image_url) {
+        elements.push({ frontal_image_url: element_image_url });
+        // Garante que o prompt cite @Element1, senão o fal ignora o elemento.
+        if (!/@Element1/i.test(finalPrompt)) {
+          finalPrompt = (finalPrompt + ELEMENT_CLAUSE).trim();
+        }
+      }
+
       input = {
-        prompt,
-        start_image_url: image_url,        // FIX: era image_url (ignorado pelo v3)
+        prompt: finalPrompt,
+        start_image_url: image_url,        // vFix1: era image_url (ignorado pelo v3)
         negative_prompt: neg,
         duration: String(duration || '5'),
         aspect_ratio: aspect_ratio || '9:16',
         cfg_scale: 0.5,
-        // FIX: silêncio por padrão. Só gera áudio se vier generate_audio === true.
+        // vFix1: silêncio por padrão. Só gera áudio se vier generate_audio === true.
         generate_audio: generate_audio === true,
       };
-      // NOTA Etapa 2: a referência do produto (element_image_url) entrará aqui
-      // como input.elements = [{ frontal_image_url: element_image_url }] e o
-      // prompt precisará citar @Element1. Mantido fora nesta etapa de propósito.
+      // vFix2: referência do produto no formato oficial do v3.
+      if (elements.length > 0) {
+        input.elements = elements;
+      }
     } else if (engine.startsWith('veo')) {
       input = {
         prompt,
@@ -83,7 +101,7 @@ export default async function handler(req, res) {
       if (aspect_ratio) input.aspect_ratio = aspect_ratio;
     }
 
-    console.log(`[video] Submitting to ${endpoint}`);
+    console.log(`[video] Submitting to ${endpoint}${input.elements ? ' (com @Element1)' : ''}`);
 
     // Submit to queue
     const submitRes = await fetch(`https://queue.fal.run/${endpoint}`, {
