@@ -787,11 +787,12 @@ export default function VtonStudio() {
     const bU = backUrl || backApprovedUrl;
 
     try {
-      // 🆕 vFix4: Kling v3 PRO + multi-shot (3 cenas × 5s = 15s).
-      // Arco coerente com os frames: frontal (start_image) → gira e mostra as
-      // costas (@Element1 = imagem de costas) → volta pra câmera (CTA).
-      // Se o roteiro já trouxer videoShots (gerador atualizado no arquivo 3),
-      // usa eles; senão usa este arco padrão confiável.
+      // 🆕 vFix4 (O3): Kling O3 STANDARD + multi-shot (3 cenas × 5s = 15s).
+      // O3 é ~3x mais rápido que o pro (15s em ~5 min, dentro da janela) e mais
+      // barato (~$1,26), e suporta os MESMOS campos: start_image_url + elements
+      // (@Element1) + multi_prompt. Arquitetura de elementos 100% preservada.
+      // Arco coerente: frontal (start) → gira e mostra as costas (@Element1) → CTA.
+      // Se o roteiro trouxer videoShots (gerador atualizado no arquivo 3), usa eles.
       const videoShots = (Array.isArray(activeRoteiro.videoShots) && activeRoteiro.videoShots.length > 0)
         ? activeRoteiro.videoShots
         : [
@@ -801,7 +802,7 @@ export default function VtonStudio() {
           ];
 
       const videoSubmit = await generateVideo({
-        engine: 'kling-pro',
+        engine: 'kling-o3',
         multi_prompt: videoShots,
         image_url: fU,            // frontal = frame inicial (start_image_url)
         element_image_url: bU,    // costas = elemento (@Element1)
