@@ -1,12 +1,11 @@
 // Poll video generation status using fal.ai provided URLs
 //
-// CHANGELOG vFix-status1:
-//   🐛 CAUSA do "timeout falso": o Vercel estava CACHEANDO as respostas deste
-//      endpoint (todas voltavam 304 Not Modified). Resultado: o app recebia
-//      sempre a resposta velha ("em progresso") e NUNCA enxergava o COMPLETED,
-//      mesmo quando o Kling já tinha terminado o vídeo → estourava os 450s.
-//   ✅ FIX: headers Cache-Control: no-store (+ variações de CDN do Vercel) pra
-//      forçar resposta fresca em CADA polling. Agora o app vê o vídeo pronto.
+// CHANGELOG vFix-status2 (raio-X de diagnóstico):
+//   Mantém o no-store da vFix-status1 (matou o 304/cache).
+//   ➕ Agora LOGA o status real do fal em cada polling, pra sabermos se o job
+//      está IN_QUEUE (preso na fila — limite de 1 job/usuário), IN_PROGRESS
+//      (gerando devagar) ou ERROR/FAILED. Isso aparece na coluna "Mensagens"
+//      do log do Vercel e tira a dúvida de uma vez.
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -33,23 +32,29 @@ export default async function handler(req, res) {
     });
 
     if (!statusRes.ok) {
-      console.error(`[video-status] Status check error ${statusRes.status}`);
+      const errBody = await statusRes.text();
+      // vFix-status2: loga o erro real do fal (status HTTP + corpo).
+      console.error(`[video-status] ${requestId} HTTP ${statusRes.status}: ${errBody.slice(0, 300)}`);
       return res.status(200).json({ status: 'IN_QUEUE', error: `Status check returned ${statusRes.status}` });
     }
 
     const status = await statusRes.json();
+
+    // vFix-status2: raio-X — loga o status real do fal em cada polling.
+    console.log(`[video-status] ${requestId} → status=${status.status || 'UNKNOWN'} | queue_position=${status.queue_position ?? 'n/a'}`);
 
     if (status.status === 'COMPLETED') {
       const resultRes = await fetch(finalResponseUrl, {
         headers: { 'Authorization': `Key ${FAL_KEY}` }
       });
       const result = await resultRes.json();
+      console.log(`[video-status] ${requestId} → COMPLETED, video=${result?.video?.url ? 'OK' : 'SEM URL'}`);
       return res.status(200).json({ status: 'COMPLETED', result });
     }
 
     return res.status(200).json({ status: status.status || 'IN_QUEUE', logs: status.logs || [] });
   } catch (error) {
-    console.error('[video-status] Error:', error);
+    console.error(`[video-status] ${requestId} Error:`, error.message);
     return res.status(200).json({ status: 'IN_QUEUE', error: error.message });
   }
 }
