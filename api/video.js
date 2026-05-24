@@ -1,20 +1,17 @@
 // fal.ai video generation proxy — supports Kling 3.0, Veo 3, Grok Imagine
 //
-// CHANGELOG vFix2 (Etapa 2 — religa a referência do PRODUTO no Kling v3):
-//   Mantém tudo da vFix1 (start_image_url, audio off, negative anti-fala) e
-//   adiciona o uso correto da referência de produto/costas:
-//   🐛 CAUSA (parte 2): o campo antigo 'element_reference_image_url' não existe
-//      no Kling v3 → a foto do produto era descartada. Além disso, mesmo no
-//      formato novo, o fal IGNORA o elemento se o prompt não citar @Element1.
-//   ✅ FIX:
-//      3. element_image_url agora entra no array oficial:
-//         input.elements = [{ frontal_image_url: element_image_url }]
-//      4. Se o prompt não citar @Element1, o código injeta automaticamente uma
-//         instrução amarrando a roupa/produto ao @Element1 (senão o fal ignora).
-//
-// CHANGELOG vFix1 (Etapa 1):
-//      1. image_url → start_image_url (v3 i2v só lê start_image_url)
-//      2. generate_audio: false por padrão + negative anti-fala
+// CHANGELOG vFix4 (15 SEGUNDOS + ELEMENTOS — arquitetura do Marcos):
+//   ✅ Suporte completo ao endpoint Kling v3 PRO (faz até 15s, aceita elementos).
+//   ✅ Imagem de COSTAS entra como ELEMENTO: elements: [{ frontal_image_url }]
+//      citado no prompt como @Element1 (formato oficial do Kling v3).
+//   ✅ @Element1 injetado automaticamente no prompt se não estiver lá
+//      (senão o fal ignora o elemento).
+//   ✅ Suporte a multi_prompt (multi-shot): INÍCIO/MEIO/CTA viram cenas,
+//      somando até 15s — caminho oficial do Kling 3.0 pra clipes longos.
+//   ✅ Duração validada POR FAMÍLIA de endpoint:
+//        - v3/standard → só 5 ou 10 (15 vira 10)
+//        - v3/pro, o3, 4k → 3 a 15 (permite os 15s)
+//   Mantém da vFix1: start_image_url, generate_audio off por padrão, anti-fala.
 const ENDPOINTS = {
   'kling': 'fal-ai/kling-video/v3/standard/image-to-video',
   'kling-pro': 'fal-ai/kling-video/v3/pro/image-to-video',
@@ -31,11 +28,26 @@ const KLING_NO_TALK = 'talking, speaking, mouth moving, lip sync, lip-sync, ' +
   'singing, subtitles, captions, text overlay, watermark, extra people, ' +
   'duplicate person, morphing, warping, distortion';
 
-// Instrução injetada no prompt quando há produto de referência mas o prompt
-// não cita @Element1 (sem isso o fal ignora o elemento).
-const ELEMENT_CLAUSE = ' Keep the clothing/product identical to @Element1, ' +
-  'preserving its exact design, color, pattern, print and details, including ' +
-  'the back of the garment when the person turns around.';
+// Cláusula que amarra a roupa/costas ao elemento (injetada se faltar @Element1).
+const ELEMENT_CLAUSE = ' Keep the outfit identical to @Element1, matching the ' +
+  'exact back view of the garment — same design, color, pattern and details — ' +
+  'when the person turns around.';
+
+// Ajusta a duração ao que cada família de endpoint aceita.
+function clampDuration(endpoint, duration) {
+  const isStandardV3 = endpoint.includes('/v3/standard/');
+  let n = parseInt(duration, 10);
+  if (isStandardV3) {
+    // v3 standard: só 5 ou 10.
+    if (n >= 10) return '10';
+    return '5';
+  }
+  // v3 pro / o3 / 4k: 3 a 15.
+  if (isNaN(n)) return '5';
+  if (n < 3) return '3';
+  if (n > 15) return '15';
+  return String(n);
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -49,7 +61,7 @@ export default async function handler(req, res) {
 
   try {
     const { engine, prompt, image_url, negative_prompt, duration, aspect_ratio,
-            element_image_url, generate_audio } = req.body;
+            element_image_url, generate_audio, multi_prompt } = req.body;
 
     const endpoint = ENDPOINTS[engine];
     if (!endpoint) return res.status(400).json({ error: `Unknown engine: ${engine}. Options: ${Object.keys(ENDPOINTS).join(', ')}` });
@@ -58,31 +70,46 @@ export default async function handler(req, res) {
     let input = { prompt };
 
     if (engine.startsWith('kling')) {
-      // Junta o negative_prompt do cliente (se houver) com os termos anti-fala.
       const neg = [negative_prompt, KLING_NO_TALK].filter(Boolean).join(', ');
 
-      // Monta o prompt e a referência de produto (Etapa 2).
-      let finalPrompt = prompt || '';
+      // Elemento = imagem de costas (formato oficial do v3).
       const elements = [];
       if (element_image_url) {
         elements.push({ frontal_image_url: element_image_url });
-        // Garante que o prompt cite @Element1, senão o fal ignora o elemento.
-        if (!/@Element1/i.test(finalPrompt)) {
-          finalPrompt = (finalPrompt + ELEMENT_CLAUSE).trim();
-        }
       }
 
       input = {
-        prompt: finalPrompt,
-        start_image_url: image_url,        // vFix1: era image_url (ignorado pelo v3)
+        start_image_url: image_url,        // frontal = frame inicial
         negative_prompt: neg,
-        duration: String(duration || '5'),
+        duration: clampDuration(endpoint, duration),
         aspect_ratio: aspect_ratio || '9:16',
         cfg_scale: 0.5,
-        // vFix1: silêncio por padrão. Só gera áudio se vier generate_audio === true.
         generate_audio: generate_audio === true,
       };
-      // vFix2: referência do produto no formato oficial do v3.
+
+      if (Array.isArray(multi_prompt) && multi_prompt.length > 0) {
+        // Multi-shot (até 15s). Garante @Element1 em alguma cena se houver elemento.
+        let shots = multi_prompt;
+        if (elements.length > 0) {
+          const hasRef = shots.some(s => /@Element1/i.test(s?.prompt || ''));
+          if (!hasRef) {
+            shots = shots.map((s, i) =>
+              i === shots.length - 1
+                ? { ...s, prompt: ((s.prompt || '') + ELEMENT_CLAUSE).trim() }
+                : s
+            );
+          }
+        }
+        input.multi_prompt = shots;
+      } else {
+        // Prompt único. Injeta @Element1 se necessário.
+        let finalPrompt = prompt || '';
+        if (elements.length > 0 && !/@Element1/i.test(finalPrompt)) {
+          finalPrompt = (finalPrompt + ELEMENT_CLAUSE).trim();
+        }
+        input.prompt = finalPrompt;
+      }
+
       if (elements.length > 0) {
         input.elements = elements;
       }
@@ -101,7 +128,7 @@ export default async function handler(req, res) {
       if (aspect_ratio) input.aspect_ratio = aspect_ratio;
     }
 
-    console.log(`[video] Submitting to ${endpoint}${input.elements ? ' (com @Element1)' : ''}`);
+    console.log(`[video] Submitting to ${endpoint} | dur=${input.duration || 'n/a'} | elements=${input.elements ? input.elements.length : 0} | multiShot=${input.multi_prompt ? input.multi_prompt.length : 0}`);
 
     // Submit to queue
     const submitRes = await fetch(`https://queue.fal.run/${endpoint}`, {
