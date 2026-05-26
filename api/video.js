@@ -1,23 +1,16 @@
 // fal.ai video generation proxy — supports Kling 3.0, Veo 3, Grok Imagine
 //
-// CHANGELOG vFix5 (CORREÇÃO DO CONTRATO DE CAMPOS — v3/standard):
-//   🔧 Engine alvo do VTON volta a ser 'kling' = v3/standard/image-to-video.
-//      Esse endpoint tem o schema 100% confirmado na doc do fal e aceita
-//      EXATAMENTE a arquitetura do Marcos: start_image_url (frontal) +
-//      elements:[{frontal_image_url}] (costas, @Element1) + multi_prompt + 3-15s.
-//      (O o3/standard/image-to-video usava 'image_url' e NÃO tinha 'elements' —
-//       por isso o vFix4 mandava frontal e costas que eram IGNORADAS pelo fal.)
-//   🔧 clampDuration: v3/standard NÃO é mais cortado em 5/10. Toda a família
-//      Kling v3/o3 aceita 3 a 15s (premissa antiga estava errada).
-//   🔧 shot_type:'customize' agora é enviado SEMPRE que houver multi_prompt —
-//      é OBRIGATÓRIO no schema quando multi_prompt é usado (faltava antes).
+// CHANGELOG vFix6 (ELEMENTO COM reference_image_urls — destrava a geração):
+//   🔧 Cada elemento do Kling v3 precisa de frontal_image_url + reference_image_urls
+//      (os DOIS) ou de video_url. Antes mandávamos só frontal_image_url → o fal
+//      rejeitava com erro de validação no body.elements[0] (o job "concluía" com
+//      erro, sem vídeo). Agora a foto de costas vai como principal E referência.
 //
-// CHANGELOG vFix4 (15 SEGUNDOS + ELEMENTOS — arquitetura do Marcos):
-//   ✅ Imagem de COSTAS entra como ELEMENTO: elements: [{ frontal_image_url }]
-//      citado no prompt como @Element1 (formato oficial do Kling v3).
-//   ✅ @Element1 injetado automaticamente no prompt se não estiver lá.
-//   ✅ Suporte a multi_prompt (multi-shot): INÍCIO/MEIO/CTA viram cenas.
-//   Mantém da vFix1: start_image_url, generate_audio off por padrão, anti-fala.
+// CHANGELOG vFix5 (CORREÇÃO DO CONTRATO DE CAMPOS — v3/standard):
+//   🔧 Engine alvo do VTON volta a ser 'kling' = v3/standard/image-to-video,
+//      que aceita start_image_url + elements + multi_prompt + 3-15s (schema OK).
+//   🔧 clampDuration: v3/standard aceita 3 a 15s (não mais cortado em 5/10).
+//   🔧 shot_type:'customize' enviado sempre que houver multi_prompt (obrigatório).
 const ENDPOINTS = {
   'kling': 'fal-ai/kling-video/v3/standard/image-to-video',
   'kling-pro': 'fal-ai/kling-video/v3/pro/image-to-video',
@@ -74,9 +67,16 @@ export default async function handler(req, res) {
       const neg = [negative_prompt, KLING_NO_TALK].filter(Boolean).join(', ');
 
       // Elemento = imagem de costas (formato oficial do v3).
+      // vFix6: o v3 EXIGE frontal_image_url + reference_image_urls (os dois) OU
+      // video_url. Mandar só frontal_image_url dá erro de validação do fal
+      // ("Deve ser fornecido frontal_image_url e reference_image_urls ou video_url").
+      // Como só temos a foto de costas, ela é a imagem principal E a referência.
       const elements = [];
       if (element_image_url) {
-        elements.push({ frontal_image_url: element_image_url });
+        elements.push({
+          frontal_image_url: element_image_url,
+          reference_image_urls: [element_image_url],
+        });
       }
 
       input = {
