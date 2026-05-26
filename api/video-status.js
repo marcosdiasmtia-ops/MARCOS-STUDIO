@@ -1,11 +1,12 @@
 // Poll video generation status using fal.ai provided URLs
 //
-// CHANGELOG vFix-status2 (raio-X de diagnóstico):
-//   Mantém o no-store da vFix-status1 (matou o 304/cache).
-//   ➕ Agora LOGA o status real do fal em cada polling, pra sabermos se o job
-//      está IN_QUEUE (preso na fila — limite de 1 job/usuário), IN_PROGRESS
-//      (gerando devagar) ou ERROR/FAILED. Isso aparece na coluna "Mensagens"
-//      do log do Vercel e tira a dúvida de uma vez.
+// CHANGELOG vFix-status3 (EXTRAÇÃO ROBUSTA DA URL):
+//   O job passou a CONCLUIR (vFix5 consertou os campos), mas vinha "SEM URL"
+//   porque a URL do vídeo no response da fila não estava em result.video.url.
+//   ➕ Agora a URL é procurada em TODOS os caminhos conhecidos do fal e
+//      normalizada pra result.video.url (o front não precisa mudar).
+//   ➕ Se mesmo assim não achar, loga o JSON cru do result (diagnóstico final).
+//   Mantém: no-store (vFix-status1) + log do status real (vFix-status2).
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -48,8 +49,37 @@ export default async function handler(req, res) {
         headers: { 'Authorization': `Key ${FAL_KEY}` }
       });
       const result = await resultRes.json();
-      console.log(`[video-status] ${requestId} → COMPLETED, video=${result?.video?.url ? 'OK' : 'SEM URL'}`);
-      return res.status(200).json({ status: 'COMPLETED', result });
+
+      // vFix-status3: o caminho da URL do vídeo no response da fila varia por
+      // endpoint/forma de resposta. O job CONCLUÍDO vinha com "SEM URL" porque
+      // procurávamos só em result.video.url. Agora procuramos em TODOS os
+      // caminhos conhecidos e NORMALIZAMOS pra result.video.url — que é o que o
+      // front (VtonStudio) lê. Assim o front nem precisa mudar.
+      const videoUrl =
+        result?.video?.url ||
+        result?.data?.video?.url ||
+        result?.response?.video?.url ||
+        result?.output?.video?.url ||
+        (typeof result?.video === 'string' ? result.video : null) ||
+        result?.videos?.[0]?.url ||
+        result?.data?.videos?.[0]?.url ||
+        result?.output?.[0]?.url ||
+        null;
+
+      if (videoUrl) {
+        console.log(`[video-status] ${requestId} → COMPLETED, video=OK (${String(videoUrl).slice(0, 70)})`);
+      } else {
+        // Diagnóstico definitivo: loga o JSON cru pra revelarmos a forma real
+        // caso a URL esteja em algum caminho ainda não mapeado.
+        console.error(`[video-status] ${requestId} → COMPLETED mas SEM URL. Result cru: ${JSON.stringify(result).slice(0, 700)}`);
+      }
+
+      // Normaliza pra result.video.url (formato esperado pelo front).
+      const normalized = videoUrl
+        ? { ...result, video: { ...(result.video || {}), url: videoUrl } }
+        : result;
+
+      return res.status(200).json({ status: 'COMPLETED', result: normalized, videoUrl });
     }
 
     return res.status(200).json({ status: status.status || 'IN_QUEUE', logs: status.logs || [] });
