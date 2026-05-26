@@ -787,10 +787,13 @@ export default function VtonStudio() {
     const bU = backUrl || backApprovedUrl;
 
     try {
-      // 🆕 vFix4 (O3): Kling O3 STANDARD + multi-shot (3 cenas × 5s = 15s).
-      // O3 é ~3x mais rápido que o pro (15s em ~5 min, dentro da janela) e mais
-      // barato (~$1,26), e suporta os MESMOS campos: start_image_url + elements
-      // (@Element1) + multi_prompt. Arquitetura de elementos 100% preservada.
+      // 🆕 vFix5: Kling v3 STANDARD (engine 'kling') + multi-shot (3 cenas × 5s = 15s).
+      // Motivo da volta pro v3/standard: é o único endpoint com schema 100%
+      // confirmado que aceita a arquitetura do Marcos de forma fiel —
+      // start_image_url (frontal) + elements:[{frontal_image_url}] (costas/@Element1)
+      // + multi_prompt + duração 3-15s. O o3/standard/image-to-video do vFix4 NÃO
+      // tinha 'elements' e usava 'image_url' → frontal e costas eram IGNORADAS,
+      // por isso o vídeo "criava coisa do nada". Mais lento que o O3, mas FIEL.
       // Arco coerente: frontal (start) → gira e mostra as costas (@Element1) → CTA.
       // Se o roteiro trouxer videoShots (gerador atualizado no arquivo 3), usa eles.
       const videoShots = (Array.isArray(activeRoteiro.videoShots) && activeRoteiro.videoShots.length > 0)
@@ -802,7 +805,7 @@ export default function VtonStudio() {
           ];
 
       const videoSubmit = await generateVideo({
-        engine: 'kling-o3',
+        engine: 'kling',          // vFix5: 'kling' = v3/standard/image-to-video (schema confirmado)
         multi_prompt: videoShots,
         image_url: fU,            // frontal = frame inicial (start_image_url)
         element_image_url: bU,    // costas = elemento (@Element1)
@@ -814,7 +817,8 @@ export default function VtonStudio() {
 
       let videoUrl = null;
       if (videoSubmit.requestId) {
-        const maxPolls = 150;  // 150 × 3s = 450s = 7,5 min
+        const maxPolls = 300;  // vFix5: 300 × 3s = 900s = 15 min. v3/standard é mais
+                               // lento que o O3; janela maior evita timeout FALSO.
         for (let p = 0; p < maxPolls; p++) {
           await new Promise(r => setTimeout(r, 3000));
           const status = await checkVideoStatus(
@@ -844,7 +848,7 @@ export default function VtonStudio() {
           if (status?.status === 'FAILED' || status?.status === 'ERROR') {
             throw new Error(`Vídeo falhou: ${JSON.stringify(status).substring(0, 200)}`);
           }
-          setActionStatus(`Vídeo em progresso (${(p + 1) * 3}s de até 450s)...`);
+          setActionStatus(`Vídeo em progresso (${(p + 1) * 3}s de até 900s)...`);
         }
       } else if (videoSubmit?.result?.video?.url) {
         videoUrl = videoSubmit.result.video.url;
