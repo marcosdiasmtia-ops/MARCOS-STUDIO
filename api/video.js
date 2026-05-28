@@ -1,16 +1,24 @@
 // fal.ai video generation proxy — supports Kling 3.0, Veo 3, Grok Imagine
 //
+// CHANGELOG vFix7 (multi_prompt no formato OFICIAL — destrava os 15s):
+//   🔧 O fal exige multi_prompt como [{prompt, duration}]. Strings simples
+//      ["...", ...] eram processadas como UMA cena só de 5s (sintoma do vídeo
+//      curto). Agora normalizamos qualquer formato (string OU objeto) e
+//      distribuímos a duração total entre os shots automaticamente.
+//   🔧 'prompt' único NUNCA vai junto com 'multi_prompt' (a doc diz either/or).
+//   ➕ Log diagnóstico: nº de shots, soma das durações, e tipo do 1º elemento
+//      recebido (pra detectar se o front mandou string ou objeto).
+//
 // CHANGELOG vFix6 (ELEMENTO COM reference_image_urls — destrava a geração):
 //   🔧 Cada elemento do Kling v3 precisa de frontal_image_url + reference_image_urls
-//      (os DOIS) ou de video_url. Antes mandávamos só frontal_image_url → o fal
-//      rejeitava com erro de validação no body.elements[0] (o job "concluía" com
-//      erro, sem vídeo). Agora a foto de costas vai como principal E referência.
+//      (os DOIS) ou de video_url. Antes só mandávamos frontal_image_url e o fal
+//      rejeitava com erro de validação (o job "concluía" com erro, sem vídeo).
 //
 // CHANGELOG vFix5 (CORREÇÃO DO CONTRATO DE CAMPOS — v3/standard):
-//   🔧 Engine alvo do VTON volta a ser 'kling' = v3/standard/image-to-video,
-//      que aceita start_image_url + elements + multi_prompt + 3-15s (schema OK).
-//   🔧 clampDuration: v3/standard aceita 3 a 15s (não mais cortado em 5/10).
-//   🔧 shot_type:'customize' enviado sempre que houver multi_prompt (obrigatório).
+//   🔧 Engine alvo do VTON volta a ser 'kling' = v3/standard/image-to-video
+//      (schema confirmado: start_image_url + elements + multi_prompt + 3-15s).
+//   🔧 clampDuration: v3/standard aceita 3 a 15s (não cortado em 5/10).
+//   🔧 shot_type:'customize' enviado sempre que houver multi_prompt.
 const ENDPOINTS = {
   'kling': 'fal-ai/kling-video/v3/standard/image-to-video',
   'kling-pro': 'fal-ai/kling-video/v3/pro/image-to-video',
@@ -89,21 +97,50 @@ export default async function handler(req, res) {
       };
 
       if (Array.isArray(multi_prompt) && multi_prompt.length > 0) {
-        // Multi-shot (até 15s). Garante @Element1 em alguma cena se houver elemento.
-        let shots = multi_prompt;
+        // vFix7: NORMALIZAÇÃO do multi_prompt.
+        // A doc do Kling v3 EXIGE [{prompt, duration}]. Strings simples ["...", ...]
+        // são processadas pelo fal como UMA cena só de 5s (sintoma do vídeo curto).
+        // Aceitamos os 2 formatos vindos do front e padronizamos pra forma correta.
+        const totalDur = parseInt(input.duration, 10) || 15;
+        const count = multi_prompt.length;
+        const baseDur = Math.max(3, Math.floor(totalDur / count));
+        const remainder = Math.max(0, totalDur - baseDur * count);
+
+        let shots = multi_prompt.map((s, i) => {
+          // Distribui a sobra (se 15/3 dá 5+5+5; se 10/3 dá 3+3+4 com a sobra no último).
+          const dur = String(baseDur + (i === count - 1 ? remainder : 0));
+          if (typeof s === 'string') {
+            return { prompt: s, duration: dur };
+          }
+          // Objeto: preserva o prompt, garante duration string
+          return {
+            prompt: String(s?.prompt || ''),
+            duration: String(s?.duration || dur),
+          };
+        });
+
+        // Garante @Element1 em alguma cena se houver elemento (caso o roteiro não cite).
         if (elements.length > 0) {
-          const hasRef = shots.some(s => /@Element1/i.test(s?.prompt || ''));
+          const hasRef = shots.some(s => /@Element1/i.test(s.prompt || ''));
           if (!hasRef) {
             shots = shots.map((s, i) =>
               i === shots.length - 1
-                ? { ...s, prompt: ((s.prompt || '') + ELEMENT_CLAUSE).trim() }
+                ? { ...s, prompt: (s.prompt + ELEMENT_CLAUSE).trim() }
                 : s
             );
           }
         }
+
         input.multi_prompt = shots;
-        // vFix5: shot_type é OBRIGATÓRIO no schema quando multi_prompt é usado.
+        // vFix5: shot_type OBRIGATÓRIO quando multi_prompt é usado.
         input.shot_type = 'customize';
+        // vFix7: a doc diz "Either prompt or multi_prompt must be provided, but
+        // NOT both". Garante que prompt único NÃO vá junto.
+        delete input.prompt;
+
+        // Diagnóstico: forma do 1º shot e duração total que vai pro fal.
+        const sumDur = shots.reduce((a, s) => a + (parseInt(s.duration, 10) || 0), 0);
+        console.log(`[video] multi_prompt normalizado: ${count} shots, somaDur=${sumDur}s, formato1=${typeof multi_prompt[0]}`);
       } else {
         // Prompt único. Injeta @Element1 se necessário.
         let finalPrompt = prompt || '';
